@@ -1,0 +1,17 @@
+/target/
+/gen/
+
+/logs/*
+!/logs/.gitkeep
+
+/data/*
+!/data/.gitkeep
+
+/conf/state.sqlite
+/conf/state.sqlite-*
+/conf/auth/
+/conf/browser_profiles/
+
+*.pdb
+*.ilk
+

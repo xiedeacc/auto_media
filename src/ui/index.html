@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Auto Media</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Auto Media</h1>
+          <p id="message">加载中</p>
+        </div>
+        <div class="actions">
+          <button id="run-now" type="button">立即检测</button>
+          <button id="pause-toggle" type="button">暂停</button>
+        </div>
+      </header>
+
+      <section class="status-grid">
+        <article class="panel">
+          <span class="label">运行状态</span>
+          <strong id="state">-</strong>
+          <small id="last-tick">-</small>
+        </article>
+        <article class="panel">
+          <span class="label">下次唤醒</span>
+          <strong id="next-wakeup">-</strong>
+          <small>每 10 分钟检测一次</small>
+        </article>
+        <article class="panel">
+          <span class="label">开机自启动</span>
+          <label class="switch">
+            <input id="autostart" type="checkbox" />
+            <span></span>
+          </label>
+          <small>当前用户启动项</small>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="platforms">
+          <article class="platform">
+            <div>
+              <span class="label">小红书</span>
+              <strong>CDP</strong>
+            </div>
+            <button data-login="xhs" type="button">登录</button>
+          </article>
+          <article class="platform">
+            <div>
+              <span class="label">知乎</span>
+              <strong>CDP</strong>
+            </div>
+            <button data-login="zhihu" type="button">登录</button>
+          </article>
+        </div>
+
+        <div class="panel wide">
+          <div class="section-head">
+            <h2>最近任务</h2>
+            <div class="dir-actions">
+              <button data-open="data" type="button">data</button>
+              <button data-open="logs" type="button">logs</button>
+              <button data-open="conf" type="button">conf</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>平台</th>
+                  <th>状态</th>
+                  <th>次数</th>
+                  <th>更新时间</th>
+                  <th>消息</th>
+                </tr>
+              </thead>
+              <tbody id="records">
+                <tr>
+                  <td colspan="5">暂无任务</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>
+

@@ -1,0 +1,48 @@
+[app]
+start_minimized = true
+single_instance = true
+
+[scheduler]
+timezone = "Asia/Shanghai"
+sleep_minutes = 10
+cutoff_time = "20:00:00"
+run_immediately_on_start = true
+
+[data]
+dir = "data"
+image_patterns = [
+  "{YYYYMMDD}*.jpg",
+  "{YYYYMMDD}*.jpeg",
+  "{YYYYMMDD}*.png",
+  "{YYYYMMDD}*.webp",
+  "{YYYY-MM-DD}*.jpg",
+  "{YYYY-MM-DD}*.jpeg",
+  "{YYYY-MM-DD}*.png",
+  "{YYYY-MM-DD}*.webp",
+]
+multi_image_policy = "first_by_name"
+
+[publish]
+title_pattern = "挑战千万美金 - {YYYYMMDD}"
+fallback_body_text = "一张图片"
+publish_platforms = ["xhs", "zhihu"]
+
+[platforms.xhs]
+enabled = true
+mode = "cdp"
+login_url = "https://www.xiaohongshu.com"
+creator_url = "https://creator.xiaohongshu.com"
+write_url = "https://creator.xiaohongshu.com/publish/publish"
+cdp_port = 9223
+
+[platforms.zhihu]
+enabled = true
+mode = "cdp"
+login_url = "https://www.zhihu.com/signin"
+write_url = "https://zhuanlan.zhihu.com/write"
+cdp_port = 9224
+
+[startup]
+enabled = true
+minimize_to_tray_on_autostart = true
+

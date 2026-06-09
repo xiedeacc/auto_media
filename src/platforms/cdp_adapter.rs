@@ -7,7 +7,8 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use std::{fs, path::PathBuf};
+use rusqlite::{params, Connection, OpenFlags};
+use std::{fs, path::PathBuf, time::SystemTime};
 
 pub struct CdpPlatformAdapter {
     platform: Platform,
@@ -58,6 +59,10 @@ impl PlatformAdapter for CdpPlatformAdapter {
     async fn validate_session(&self) -> Result<SessionStatus> {
         if self.auth_file.exists() {
             Ok(SessionStatus::Valid { account_name: None })
+        } else if self.has_login_cookie()? {
+            Ok(SessionStatus::Valid { account_name: None })
+        } else if self.has_recent_profile_activity()? {
+            Ok(SessionStatus::RiskVerificationRequired)
         } else {
             Ok(SessionStatus::Missing)
         }
@@ -98,5 +103,95 @@ impl PlatformAdapter for CdpPlatformAdapter {
         );
 
         anyhow::bail!(message)
+    }
+}
+
+impl CdpPlatformAdapter {
+    fn has_login_cookie(&self) -> Result<bool> {
+        let cookie_db = self
+            .profile_dir
+            .join("Default")
+            .join("Network")
+            .join("Cookies");
+        if !cookie_db.exists() {
+            return Ok(false);
+        }
+
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+        let uri = format!(
+            "file:{}?mode=ro&immutable=1",
+            cookie_db.display().to_string().replace('\\', "/")
+        );
+        let conn = match Connection::open_with_flags(uri, flags) {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::warn!(
+                    platform = %self.platform,
+                    error = %error,
+                    "cookie database is not readable yet"
+                );
+                return self.cookie_file_contains_login_cookie(&cookie_db);
+            }
+        };
+
+        let (host_pattern, cookie_names): (&str, &[&str]) = match self.platform {
+            Platform::Xhs => ("%xiaohongshu%", &["web_session", "web_session_id"]),
+            Platform::Zhihu => ("%zhihu%", &["z_c0"]),
+        };
+
+        for cookie_name in cookie_names {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(1) FROM cookies WHERE host_key LIKE ?1 AND name = ?2",
+                params![host_pattern, cookie_name],
+                |row| row.get(0),
+            )?;
+            if count > 0 {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn cookie_file_contains_login_cookie(&self, cookie_db: &PathBuf) -> Result<bool> {
+        let bytes = match fs::read(cookie_db) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    platform = %self.platform,
+                    error = %error,
+                    "cookie database bytes are not readable"
+                );
+                return Ok(false);
+            }
+        };
+
+        let names: &[&[u8]] = match self.platform {
+            Platform::Xhs => &[b"web_session", b"web_session_id"],
+            Platform::Zhihu => &[b"z_c0"],
+        };
+
+        Ok(names
+            .iter()
+            .any(|name| bytes.windows(name.len()).any(|window| window == *name)))
+    }
+
+    fn has_recent_profile_activity(&self) -> Result<bool> {
+        let local_state = self.profile_dir.join("Local State");
+        let default_dir = self.profile_dir.join("Default");
+        let latest = [local_state, default_dir]
+            .into_iter()
+            .filter_map(|path| fs::metadata(path).ok())
+            .filter_map(|metadata| metadata.modified().ok())
+            .max();
+
+        let Some(modified) = latest else {
+            return Ok(false);
+        };
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default()
+            .as_secs();
+        Ok(age <= 60 * 60 * 24)
     }
 }

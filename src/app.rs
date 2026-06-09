@@ -1,7 +1,7 @@
 use crate::{
     commands,
     config::{load_or_create, AppConfig, RuntimePaths},
-    platforms::{CdpPlatformAdapter, Platform, PlatformAdapter},
+    platforms::{CdpPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
     publish::Publisher,
     scheduler::{RuntimeStatus, Scheduler},
     state::StateStore,
@@ -30,6 +30,13 @@ pub struct PathSummary {
     pub conf: String,
     pub data: String,
     pub logs: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlatformSessionSummary {
+    pub platform: String,
+    pub status: SessionStatus,
+    pub label: String,
 }
 
 impl AppController {
@@ -62,6 +69,25 @@ impl AppController {
 
     pub async fn status(&self) -> RuntimeStatus {
         self.scheduler.status().await
+    }
+
+    pub async fn platform_sessions(&self) -> Vec<PlatformSessionSummary> {
+        let mut sessions = Vec::new();
+        for platform in [Platform::Xhs, Platform::Zhihu] {
+            if let Some(adapter) = self.adapters.get(&platform) {
+                let status = adapter.validate_session().await.unwrap_or_else(|error| {
+                    SessionStatus::NetworkError {
+                        message: error.to_string(),
+                    }
+                });
+                sessions.push(PlatformSessionSummary {
+                    platform: platform.as_str().to_string(),
+                    label: status.label().to_string(),
+                    status,
+                });
+            }
+        }
+        sessions
     }
 
     pub async fn login_platform(&self, platform: Platform) -> Result<()> {

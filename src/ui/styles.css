@@ -98,6 +98,36 @@ h2 {
   line-height: 1.2;
 }
 
+.platform-status {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.2;
+  border: 1px solid #cbd6e2;
+  background: #f6f8fb;
+  color: #526171;
+}
+
+.platform-status.ok {
+  border-color: #8ac49e;
+  background: #e9f7ee;
+  color: #20613a;
+}
+
+.platform-status.pending {
+  border-color: #d8ba65;
+  background: #fff8df;
+  color: #755a00;
+}
+
+.platform-status.missing {
+  border-color: #d6a1a1;
+  background: #fff0f0;
+  color: #8c2929;
+}
+
 .panel small {
   display: block;
   margin-top: 8px;
@@ -232,4 +262,3 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 }
-

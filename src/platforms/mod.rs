@@ -52,6 +52,18 @@ pub enum SessionStatus {
     RiskVerificationRequired,
 }
 
+impl SessionStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Valid { .. } => "已登录",
+            Self::Expired => "已失效",
+            Self::Missing => "未登录",
+            Self::NetworkError { .. } => "网络错误",
+            Self::RiskVerificationRequired => "需确认",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishResult {
     pub platform: Platform,

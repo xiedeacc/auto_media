@@ -9,6 +9,8 @@ const els = {
   pauseToggle: document.querySelector("#pause-toggle"),
   autostart: document.querySelector("#autostart"),
   records: document.querySelector("#records"),
+  platformStatuses: document.querySelectorAll("[data-platform-status]"),
+  loginButtons: document.querySelectorAll("[data-login]"),
 };
 
 let paused = false;
@@ -36,10 +38,33 @@ async function refresh() {
     els.nextWakeup.textContent = fmt(status.next_wakeup);
     els.pauseToggle.textContent = paused ? "恢复" : "暂停";
     els.autostart.checked = Boolean(data.autostart_enabled);
+    renderPlatformSessions(data.platform_sessions || []);
     renderRecords(status.recent_platform_statuses || []);
   } catch (error) {
     els.message.textContent = error.message;
   }
+}
+
+function renderPlatformSessions(sessions) {
+  const byPlatform = new Map(sessions.map((session) => [session.platform, session]));
+  els.platformStatuses.forEach((node) => {
+    const platform = node.dataset.platformStatus;
+    const session = byPlatform.get(platform);
+    const label = session?.label || "未启用";
+    node.textContent = label;
+    node.className = `platform-status ${statusClass(label)}`;
+  });
+  els.loginButtons.forEach((button) => {
+    const session = byPlatform.get(button.dataset.login);
+    button.textContent = session?.label === "已登录" ? "重新登录" : "登录";
+  });
+}
+
+function statusClass(label) {
+  if (label === "已登录") return "ok";
+  if (label === "需确认") return "pending";
+  if (label === "未登录") return "missing";
+  return "unknown";
 }
 
 function renderRecords(records) {
@@ -104,7 +129,7 @@ els.autostart.addEventListener("change", async () => {
   }
 });
 
-document.querySelectorAll("[data-login]").forEach((button) => {
+els.loginButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     try {
       await call("login_platform", { platform: button.dataset.login });

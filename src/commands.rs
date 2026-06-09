@@ -7,9 +7,11 @@ pub async fn get_status(
     app: AppHandle,
 ) -> Result<serde_json::Value, String> {
     let status = state.controller.status().await;
+    let platform_sessions = state.controller.platform_sessions().await;
     let autostart = crate::startup::autostart_enabled(&app).unwrap_or(false);
     let payload = serde_json::json!({
         "status": status,
+        "platform_sessions": platform_sessions,
         "paths": state.controller.path_summary(),
         "autostart_enabled": autostart
     });

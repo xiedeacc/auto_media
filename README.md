@@ -2,6 +2,8 @@
 
 Rust + Tauri 桌面自动发布工具。详细方案见 `system_design.md`。
 
+![screenshot](docs/ScreenShot.png)
+
 ## 目录
 
 - `src`: Rust/Tauri 源码和静态前端。

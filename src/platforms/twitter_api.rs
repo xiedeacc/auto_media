@@ -24,6 +24,7 @@ pub async fn publish_tweet(
     for path in image_paths.iter().take(4) {
         media_ids.push(session.upload_media(&client, path).await?);
     }
+    let body = normalize_hashtag_line(body);
     let text = [title.trim(), body.trim()]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -37,6 +38,43 @@ pub async fn publish_tweet(
         "Twitter/X API 已提交发布：{}",
         compact_json(&response)
     ))
+}
+
+fn normalize_hashtag_line(body: &str) -> String {
+    let mut lines = body.lines().map(ToString::to_string).collect::<Vec<_>>();
+    let Some(last_index) = lines.iter().rposition(|line| !line.trim().is_empty()) else {
+        return body.trim().to_string();
+    };
+    let tokens = lines[last_index].split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return body.trim().to_string();
+    }
+    let looks_like_tags = tokens.len() > 1 || tokens[0].trim_start().starts_with('#');
+    if !looks_like_tags {
+        return body.trim().to_string();
+    }
+    lines[last_index] = tokens
+        .into_iter()
+        .map(|token| {
+            let normalized = token
+                .trim()
+                .trim_matches(|ch: char| {
+                    matches!(
+                        ch,
+                        ',' | '，' | '.' | '。' | ';' | '；' | ':' | '：' | '!' | '！'
+                    )
+                })
+                .trim_start_matches('#');
+            if normalized.is_empty() {
+                String::new()
+            } else {
+                format!("#{normalized}")
+            }
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.join("\n").trim().to_string()
 }
 
 struct TwitterSession {
@@ -311,5 +349,19 @@ fn compact_json(value: &Value) -> String {
         format!("{}...", text.chars().take(300).collect::<String>())
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn twitter_normalizes_last_tag_line() {
+        let body = "正文\n\n#投资理财 富途 盈透";
+        assert_eq!(
+            normalize_hashtag_line(body),
+            "正文\n\n#投资理财 #富途 #盈透"
+        );
     }
 }

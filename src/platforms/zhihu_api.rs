@@ -200,6 +200,13 @@ impl ZhihuSession {
         image_infos: &[ImageInfo],
     ) -> Result<Value> {
         let draft_id = self.create_content_draft(client).await?;
+        let topic_names = extract_tag_names(body);
+        let mut topics = Vec::new();
+        for name in &topic_names {
+            if let Some(topic) = self.search_topic(client, name).await? {
+                topics.push(topic);
+            }
+        }
         let html = format!(
             "<p>{}</p>{}",
             html_escape(body),
@@ -212,7 +219,8 @@ impl ZhihuSession {
                 "hybrid": { "html": html, "textLength": body.chars().count() },
                 "extra_info": { "publisher": "pc" },
                 "draft": { "disabled": 1, "id": draft_id },
-                "commentsPermission": { "comment_permission": "anyone" }
+                "commentsPermission": { "comment_permission": "anyone" },
+                "topics": topics
             }
         });
         let response = client
@@ -224,6 +232,25 @@ impl ZhihuSession {
             .await
             .context("知乎发布文章失败")?;
         handle_response(response).await
+    }
+
+    async fn search_topic(&self, client: &reqwest::Client, name: &str) -> Result<Option<Value>> {
+        let response = client
+            .get(format!("{API_V4}/search_v3"))
+            .headers(self.headers()?)
+            .query(&[
+                ("t", "general"),
+                ("q", name),
+                ("correction", "1"),
+                ("offset", "0"),
+                ("limit", "20"),
+                ("show_all_topics", "1"),
+            ])
+            .send()
+            .await
+            .with_context(|| format!("知乎搜索话题失败: {name}"))?;
+        let value = handle_response(response).await?;
+        Ok(find_topic_candidate(&value, name))
     }
 
     async fn create_content_draft(&self, client: &reqwest::Client) -> Result<String> {
@@ -299,6 +326,77 @@ fn required_str(value: &Value, field: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("知乎响应缺少 {field}"))
 }
 
+fn extract_tag_names(body: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let Some(tag_line) = body.lines().rev().find(|line| !line.trim().is_empty()) else {
+        return tags;
+    };
+    let tokens = tag_line.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.len() == 1 && !tokens[0].trim_start().starts_with('#') {
+        return tags;
+    }
+    for raw in tokens {
+        let tag = raw
+            .trim()
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    ',' | '，' | '.' | '。' | ';' | '；' | ':' | '：' | '!' | '！'
+                )
+            })
+            .trim_start_matches('#')
+            .trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if !tags.iter().any(|existing| existing == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags
+}
+
+fn find_topic_candidate(value: &Value, name: &str) -> Option<Value> {
+    let mut candidates = Vec::new();
+    collect_topic_candidates(value, &mut candidates);
+    candidates
+        .iter()
+        .find(|topic| {
+            topic
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|topic_name| topic_name == name)
+                .unwrap_or(false)
+        })
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            let type_is_topic = map.get("type").and_then(Value::as_str) == Some("topic");
+            let has_topic_shape = map.get("id").is_some() && map.get("name").is_some();
+            if type_is_topic && has_topic_shape {
+                candidates.push(json!({
+                    "id": map.get("id").cloned().unwrap_or(Value::Null),
+                    "name": map.get("name").cloned().unwrap_or(Value::Null),
+                    "type": "topic"
+                }));
+            }
+            for child in map.values() {
+                collect_topic_candidates(child, candidates);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_topic_candidates(child, candidates);
+            }
+        }
+        _ => {}
+    }
+}
+
 async fn handle_response(response: reqwest::Response) -> Result<Value> {
     let status = response.status();
     let text = response.text().await?;
@@ -343,5 +441,28 @@ fn compact_json(value: &Value) -> String {
         format!("{}...", text.chars().take(300).collect::<String>())
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zhihu_extracts_topic_names_from_last_tag_line() {
+        let body = "正文内容\n\n#投资理财 #美股 富途";
+        assert_eq!(extract_tag_names(body), vec!["投资理财", "美股", "富途"]);
+    }
+
+    #[test]
+    fn zhihu_collects_topic_candidates() {
+        let value = json!({
+            "data": [
+                { "object": { "type": "topic", "id": "123", "name": "美股" } }
+            ]
+        });
+        let topic = find_topic_candidate(&value, "美股").unwrap();
+        assert_eq!(topic["id"], "123");
+        assert_eq!(topic["name"], "美股");
     }
 }

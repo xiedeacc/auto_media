@@ -141,7 +141,32 @@ pub enum MultiImagePolicy {
 pub struct PublishSection {
     pub title_pattern: String,
     pub fallback_body_text: String,
+    #[serde(default = "default_tags")]
+    pub tags: Vec<String>,
     pub publish_platforms: Vec<String>,
+}
+
+fn default_tags() -> Vec<String> {
+    [
+        "#投资理财",
+        "#投资",
+        "#理财",
+        "#美股",
+        "#交易员",
+        "#期权",
+        "#期权交易",
+        "#美股期权",
+        "#投资挑战",
+        "#实盘记录",
+        "#账户盈利",
+        "#交易复盘",
+        "富途",
+        "盈透",
+        "老虎",
+    ]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,12 +227,25 @@ impl Default for AppConfig {
                     "*{YYYYMMDDHHMMSS}*.jpeg".to_string(),
                     "*{YYYYMMDDHHMMSS}*.png".to_string(),
                     "*{YYYYMMDDHHMMSS}*.webp".to_string(),
+                    "*{YYYYMMDD}_{HH}{mm}{SS}*.jpg".to_string(),
+                    "*{YYYYMMDD}_{HH}{mm}{SS}*.jpeg".to_string(),
+                    "*{YYYYMMDD}_{HH}{mm}{SS}*.png".to_string(),
+                    "*{YYYYMMDD}_{HH}{mm}{SS}*.webp".to_string(),
+                    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpg".to_string(),
+                    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpeg".to_string(),
+                    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.png".to_string(),
+                    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.webp".to_string(),
+                    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpg".to_string(),
+                    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpeg".to_string(),
+                    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.png".to_string(),
+                    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.webp".to_string(),
                 ],
                 multi_image_policy: MultiImagePolicy::Newest,
             },
             publish: PublishSection {
                 title_pattern: "挑战千万美金 - {YYYYMMDD}".to_string(),
                 fallback_body_text: "挑战千万美金 - {YYYYMMDD}".to_string(),
+                tags: default_tags(),
                 publish_platforms: vec![
                     "xhs".to_string(),
                     "zhihu".to_string(),

@@ -1,6 +1,7 @@
 use crate::config::MultiImagePolicy;
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use regex::RegexBuilder;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -96,27 +97,14 @@ impl ImageScanner {
             return None;
         }
 
-        for captured_at in extract_embedded_timestamps(file_name) {
-            if captured_at.date() == target_date {
-                let timestamp = captured_at.format("%Y%m%d%H%M%S").to_string();
-                if self.patterns.iter().any(|pattern| {
-                    let expanded = expand_pattern(pattern, target_date, Some(&timestamp));
-                    wildcard_match(&expanded.to_ascii_lowercase(), &lower)
-                }) {
+        for pattern in &self.patterns {
+            if let Some(captured_at) = parse_datetime_by_pattern(pattern, file_name) {
+                if captured_at.date() == target_date {
                     return Some(Some(captured_at));
                 }
             }
         }
-
-        let matches_prefix = self.patterns.iter().any(|pattern| {
-            if pattern.contains("{YYYYMMDDHHMMSS}") {
-                return false;
-            }
-            let expanded = expand_pattern(pattern, target_date, None);
-            wildcard_match(&expanded.to_ascii_lowercase(), &lower)
-        });
-
-        matches_prefix.then_some(None)
+        None
     }
 }
 
@@ -127,71 +115,74 @@ fn compare_newest_first(a: &TargetImage, b: &TargetImage) -> std::cmp::Ordering 
         .then_with(|| b.path.cmp(&a.path))
 }
 
-fn expand_pattern(pattern: &str, target_date: NaiveDate, timestamp: Option<&str>) -> String {
-    pattern
-        .replace("{YYYYMMDDHHMMSS}", timestamp.unwrap_or(""))
-        .replace("{YYYYMMDD}", &target_date.format("%Y%m%d").to_string())
-        .replace("{YYYY-MM-DD}", &target_date.format("%Y-%m-%d").to_string())
+fn parse_datetime_by_pattern(pattern: &str, file_name: &str) -> Option<NaiveDateTime> {
+    let regex_pattern = pattern_to_regex(pattern)?;
+    let regex = RegexBuilder::new(&regex_pattern)
+        .case_insensitive(true)
+        .build()
+        .ok()?;
+    let captures = regex.captures(file_name)?;
+    let year = capture_u32(&captures, "year")? as i32;
+    let month = capture_u32(&captures, "month")?;
+    let day = capture_u32(&captures, "day")?;
+    let hour = capture_u32(&captures, "hour").unwrap_or(0);
+    let minute = capture_u32(&captures, "minute").unwrap_or(0);
+    let second = capture_u32(&captures, "second").unwrap_or(0);
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = NaiveTime::from_hms_opt(hour, minute, second)?;
+    Some(date.and_time(time))
 }
 
-fn wildcard_match(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut pattern_index = 0;
-    let mut value_index = 0;
-    let mut star_index = None;
-    let mut star_value_index = 0;
+fn capture_u32(captures: &regex::Captures<'_>, name: &str) -> Option<u32> {
+    captures.name(name)?.as_str().parse().ok()
+}
 
-    while value_index < value.len() {
-        if pattern_index < pattern.len() && pattern[pattern_index] == value[value_index] {
-            pattern_index += 1;
-            value_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-            star_index = Some(pattern_index);
-            pattern_index += 1;
-            star_value_index = value_index;
-        } else if let Some(star) = star_index {
-            pattern_index = star + 1;
-            star_value_index += 1;
-            value_index = star_value_index;
+fn pattern_to_regex(pattern: &str) -> Option<String> {
+    let mut regex = String::from("^");
+    let mut rest = pattern;
+    while !rest.is_empty() {
+        if rest.starts_with('*') {
+            regex.push_str(".*");
+            rest = &rest[1..];
+        } else if rest.starts_with("{YYYYMMDDHHMMSS}") {
+            regex.push_str(
+                r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})",
+            );
+            rest = &rest["{YYYYMMDDHHMMSS}".len()..];
+        } else if rest.starts_with("{YYYYMMDD}") {
+            regex.push_str(r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})");
+            rest = &rest["{YYYYMMDD}".len()..];
+        } else if rest.starts_with("{YYYY-MM-DD}") {
+            regex.push_str(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})");
+            rest = &rest["{YYYY-MM-DD}".len()..];
+        } else if rest.starts_with("{YYYY}") {
+            regex.push_str(r"(?P<year>\d{4})");
+            rest = &rest["{YYYY}".len()..];
+        } else if rest.starts_with("{MM}") {
+            regex.push_str(r"(?P<month>\d{2})");
+            rest = &rest["{MM}".len()..];
+        } else if rest.starts_with("{DD}") {
+            regex.push_str(r"(?P<day>\d{2})");
+            rest = &rest["{DD}".len()..];
+        } else if rest.starts_with("{HH}") {
+            regex.push_str(r"(?P<hour>\d{2})");
+            rest = &rest["{HH}".len()..];
+        } else if rest.starts_with("{mm}") {
+            regex.push_str(r"(?P<minute>\d{2})");
+            rest = &rest["{mm}".len()..];
+        } else if rest.starts_with("{SS}") {
+            regex.push_str(r"(?P<second>\d{2})");
+            rest = &rest["{SS}".len()..];
+        } else if rest.starts_with('{') {
+            return None;
         } else {
-            return false;
+            let ch = rest.chars().next()?;
+            regex.push_str(&regex::escape(&ch.to_string()));
+            rest = &rest[ch.len_utf8()..];
         }
     }
-
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-        pattern_index += 1;
-    }
-
-    pattern_index == pattern.len()
-}
-
-fn extract_embedded_timestamps(file_name: &str) -> Vec<NaiveDateTime> {
-    let bytes = file_name.as_bytes();
-    if bytes.len() < 14 {
-        return Vec::new();
-    }
-
-    let mut timestamps = Vec::new();
-    for start in 0..=bytes.len() - 14 {
-        let candidate = &bytes[start..start + 14];
-        if !candidate.iter().all(u8::is_ascii_digit) {
-            continue;
-        }
-
-        let Ok(text) = std::str::from_utf8(candidate) else {
-            continue;
-        };
-        let Ok(date) = NaiveDate::parse_from_str(&text[..8], "%Y%m%d") else {
-            continue;
-        };
-        let Ok(time) = NaiveTime::parse_from_str(&text[8..], "%H%M%S") else {
-            continue;
-        };
-        timestamps.push(date.and_time(time));
-    }
-
-    timestamps
+    regex.push('$');
+    Some(regex)
 }
 
 fn is_supported_image(file_name: &str) -> bool {
@@ -290,6 +281,32 @@ mod tests {
         assert_eq!(
             image.path.file_name().unwrap(),
             "微信图片_20260610200646_374_14.PNG"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn supports_separated_timestamp_patterns() {
+        let dir = make_temp_dir("separated_timestamp");
+        fs::write(dir.join("微信图片_20260610_200646_older.png"), b"image").unwrap();
+        fs::write(dir.join("微信图片_2026-06-10_21-06-46_newer.png"), b"image").unwrap();
+
+        let scanner = ImageScanner::new(
+            dir.clone(),
+            vec![
+                "*{YYYYMMDD}_{HH}{mm}{SS}*.png".to_string(),
+                "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.png".to_string(),
+            ],
+            MultiImagePolicy::Newest,
+        );
+        let image = scanner
+            .find_target_image(NaiveDate::from_ymd_opt(2026, 6, 10).unwrap())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            image.path.file_name().unwrap(),
+            "微信图片_2026-06-10_21-06-46_newer.png"
         );
         let _ = fs::remove_dir_all(dir);
     }

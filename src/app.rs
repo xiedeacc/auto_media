@@ -108,11 +108,17 @@ impl AppController {
         &self,
         title: String,
         text: String,
+        tags: Option<String>,
         image_paths: Vec<String>,
         platforms: Option<Vec<String>>,
     ) -> Result<String> {
         let image_paths = image_paths.into_iter().map(Into::into).collect::<Vec<_>>();
-        let job = ManualPublishJob::new(title, text, image_paths)?;
+        let tags = tags
+            .as_deref()
+            .map(parse_tags)
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or_else(|| self.config.publish.tags.clone());
+        let job = ManualPublishJob::new(title, text, image_paths, &tags)?;
         let mut messages = Vec::new();
         let platform_names = platforms
             .filter(|platforms| !platforms.is_empty())
@@ -188,6 +194,10 @@ impl AppController {
         }
     }
 
+    pub fn publish_tags(&self) -> Vec<String> {
+        self.config.publish.tags.clone()
+    }
+
     pub async fn close_browser_tabs(&self) {
         let browser = CdpBrowser::default();
         for (platform, enabled, port) in [
@@ -228,6 +238,14 @@ impl AppController {
             }
         }
     }
+}
+
+fn parse_tags(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 pub fn run() -> Result<()> {

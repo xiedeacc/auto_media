@@ -85,6 +85,7 @@ impl Publisher {
             image.path,
             &self.config.publish.title_pattern,
             &self.config.publish.fallback_body_text,
+            &self.config.publish.tags,
         )?;
         self.state.upsert_job(&job)?;
 

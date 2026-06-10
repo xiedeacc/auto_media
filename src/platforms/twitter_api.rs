@@ -291,12 +291,18 @@ async fn handle_response(response: reqwest::Response) -> Result<Value> {
     if text.is_empty() {
         return Ok(Value::Null);
     }
-    serde_json::from_str(&text).with_context(|| {
+    let value: Value = serde_json::from_str(&text).with_context(|| {
         format!(
             "Twitter/X 返回非 JSON: {}",
             text.chars().take(200).collect::<String>()
         )
-    })
+    })?;
+    if let Some(errors) = value.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            anyhow::bail!("Twitter/X API 错误: {}", compact_json(&value));
+        }
+    }
+    Ok(value)
 }
 
 fn compact_json(value: &Value) -> String {

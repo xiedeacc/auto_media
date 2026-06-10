@@ -14,6 +14,7 @@ pub async fn get_status(
         "status": status,
         "platform_sessions": platform_sessions,
         "paths": state.controller.path_summary(),
+        "publish_tags": state.controller.publish_tags(),
         "autostart_enabled": autostart
     });
     Ok(payload)
@@ -70,12 +71,13 @@ pub async fn manual_publish(
     state: State<'_, SharedState>,
     title: String,
     text: String,
+    tags: Option<String>,
     image_paths: Vec<String>,
     platforms: Option<Vec<String>>,
 ) -> Result<String, String> {
     state
         .controller
-        .manual_publish(title, text, image_paths, platforms)
+        .manual_publish(title, text, tags, image_paths, platforms)
         .await
         .map_err(|error| error.to_string())
 }

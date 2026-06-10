@@ -20,6 +20,7 @@ const els = {
   imageList: document.querySelector("#image-list"),
   manualTitle: document.querySelector("#manual-title"),
   manualText: document.querySelector("#manual-text"),
+  manualTags: document.querySelector("#manual-tags"),
   submitManual: document.querySelector("#submit-manual"),
   manualPlatforms: document.querySelectorAll('input[name="manual-platform"]'),
   platformStatuses: document.querySelectorAll("[data-platform-status]"),
@@ -30,6 +31,8 @@ let paused = false;
 let busy = false;
 let manualImages = [];
 let lastMessage = "";
+let defaultTags = [];
+let manualTagsInitialized = false;
 
 function fmt(value) {
   if (!value) return "-";
@@ -55,6 +58,11 @@ async function refresh() {
     els.nextWakeup.textContent = fmt(status.next_wakeup);
     els.pauseToggle.textContent = paused ? "恢复" : "暂停";
     els.autostart.checked = Boolean(data.autostart_enabled);
+    defaultTags = data.publish_tags || [];
+    if (!manualTagsInitialized && els.manualTags && !els.manualTags.value.trim()) {
+      els.manualTags.value = defaultTags.join(" ");
+      manualTagsInitialized = true;
+    }
     renderPlatformSessions(data.platform_sessions || []);
     renderRecords(status.recent_platform_statuses || []);
   } catch (error) {
@@ -77,6 +85,10 @@ function showError(error) {
 }
 
 function openManualModal() {
+  if (els.manualTags && !els.manualTags.value.trim()) {
+    els.manualTags.value = defaultTags.join(" ");
+    manualTagsInitialized = true;
+  }
   els.manualModal.classList.remove("hidden");
   els.manualTitle.focus();
 }
@@ -291,6 +303,7 @@ els.submitManual.addEventListener("click", async () => {
     const message = await call("manual_publish", {
       title: els.manualTitle.value,
       text: els.manualText.value,
+      tags: els.manualTags.value,
       imagePaths: manualImages,
       platforms,
     });

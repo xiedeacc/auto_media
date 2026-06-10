@@ -205,6 +205,7 @@ impl ZhihuSession {
         for name in &topic_names {
             if let Some(topic_id) = self.search_topic_id(client, name).await? {
                 topic_ids.push(topic_id);
+                break;
             }
         }
         let html = format!(
@@ -376,7 +377,6 @@ fn find_topic_id_candidate(value: &Value, name: &str) -> Option<String> {
                 .map(|topic_name| topic_name == name)
                 .unwrap_or(false)
         })
-        .or_else(|| candidates.first())
         .and_then(|topic| {
             topic.get("id").and_then(|id| {
                 id.as_str()

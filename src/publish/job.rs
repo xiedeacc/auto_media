@@ -19,6 +19,14 @@ pub struct PublishJob {
     pub image_mtime: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualPublishJob {
+    pub job_id: String,
+    pub title: String,
+    pub body_text: String,
+    pub image_paths: Vec<PathBuf>,
+}
+
 impl PublishJob {
     pub fn from_image(
         target_date: NaiveDate,
@@ -35,17 +43,55 @@ impl PublishJob {
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default();
-        let title = title_pattern.replace("{YYYYMMDD}", &target_date.format("%Y%m%d").to_string());
+        let title = render_date_pattern(title_pattern, target_date);
+        let body_text = render_date_pattern(body_text, target_date);
         let job_id = make_job_id(target_date, &image_path, image_size, image_mtime);
 
         Ok(Self {
             job_id,
             target_date,
             title,
-            body_text: body_text.to_string(),
+            body_text,
             image_path,
             image_size,
             image_mtime,
+        })
+    }
+}
+
+fn render_date_pattern(pattern: &str, target_date: NaiveDate) -> String {
+    pattern
+        .replace("{YYYYMMDD}", &target_date.format("%Y%m%d").to_string())
+        .replace("{YYYY-MM-DD}", &target_date.format("%Y-%m-%d").to_string())
+}
+
+impl ManualPublishJob {
+    pub fn new(title: String, body_text: String, image_paths: Vec<PathBuf>) -> Result<Self> {
+        anyhow::ensure!(!image_paths.is_empty(), "请选择至少一张图片");
+        let now = chrono::Local::now();
+        let title = if title.trim().is_empty() {
+            format!("手动发文 - {}", now.format("%Y%m%d%H%M%S"))
+        } else {
+            title.trim().to_string()
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(now.to_rfc3339());
+        hasher.update(title.as_bytes());
+        hasher.update(body_text.as_bytes());
+        for image_path in &image_paths {
+            let metadata = fs::metadata(image_path)
+                .with_context(|| format!("read metadata {}", image_path.display()))?;
+            anyhow::ensure!(metadata.is_file(), "{} 不是文件", image_path.display());
+            anyhow::ensure!(metadata.len() > 0, "{} 是空文件", image_path.display());
+            hasher.update(image_path.display().to_string());
+            hasher.update(metadata.len().to_le_bytes());
+        }
+
+        Ok(Self {
+            job_id: hex::encode(hasher.finalize()),
+            title,
+            body_text,
+            image_paths,
         })
     }
 }
@@ -79,12 +125,12 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 6, 9).unwrap(),
             image,
             "挑战千万美金 - {YYYYMMDD}",
-            "一张图片",
+            "挑战千万美金 - {YYYYMMDD}",
         )
         .unwrap();
 
         assert_eq!(job.title, "挑战千万美金 - 20260609");
-        assert_eq!(job.body_text, "一张图片");
+        assert_eq!(job.body_text, "挑战千万美金 - 20260609");
         assert!(!job.job_id.is_empty());
         let _ = fs::remove_dir_all(dir);
     }

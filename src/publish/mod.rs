@@ -172,6 +172,6 @@ impl Publisher {
     }
 
     pub fn recent_statuses(&self) -> Result<Vec<PlatformStatusRecord>> {
-        self.state.recent_platform_statuses(20)
+        self.state.recent_platform_statuses(30)
     }
 }

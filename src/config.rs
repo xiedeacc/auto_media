@@ -120,6 +120,8 @@ pub struct PublishSection {
 pub struct PlatformSections {
     pub xhs: PlatformSection,
     pub zhihu: PlatformSection,
+    #[serde(default = "default_twitter_platform")]
+    pub twitter: PlatformSection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +132,17 @@ pub struct PlatformSection {
     pub write_url: Option<String>,
     pub creator_url: Option<String>,
     pub cdp_port: u16,
+}
+
+fn default_twitter_platform() -> PlatformSection {
+    PlatformSection {
+        enabled: true,
+        mode: "cdp".to_string(),
+        login_url: "https://x.com/i/flow/login".to_string(),
+        creator_url: Some("https://x.com".to_string()),
+        write_url: Some("https://x.com/home".to_string()),
+        cdp_port: 9225,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,8 +180,12 @@ impl Default for AppConfig {
             },
             publish: PublishSection {
                 title_pattern: "挑战千万美金 - {YYYYMMDD}".to_string(),
-                fallback_body_text: "一张图片".to_string(),
-                publish_platforms: vec!["xhs".to_string(), "zhihu".to_string()],
+                fallback_body_text: "挑战千万美金 - {YYYYMMDD}".to_string(),
+                publish_platforms: vec![
+                    "xhs".to_string(),
+                    "zhihu".to_string(),
+                    "twitter".to_string(),
+                ],
             },
             platforms: PlatformSections {
                 xhs: PlatformSection {
@@ -186,6 +203,14 @@ impl Default for AppConfig {
                     creator_url: None,
                     write_url: Some("https://zhuanlan.zhihu.com/write".to_string()),
                     cdp_port: 9224,
+                },
+                twitter: PlatformSection {
+                    enabled: true,
+                    mode: "cdp".to_string(),
+                    login_url: "https://x.com/i/flow/login".to_string(),
+                    creator_url: Some("https://x.com".to_string()),
+                    write_url: Some("https://x.com/home".to_string()),
+                    cdp_port: 9225,
                 },
             },
             startup: StartupSection {

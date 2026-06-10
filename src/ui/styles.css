@@ -13,6 +13,8 @@
 body {
   margin: 0;
   min-width: 820px;
+  height: 100vh;
+  overflow: hidden;
 }
 
 button {
@@ -34,7 +36,11 @@ button:hover {
 .shell {
   width: min(1120px, calc(100vw - 48px));
   margin: 0 auto;
-  padding: 24px 0 32px;
+  height: 100vh;
+  padding: 24px 0 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -63,8 +69,7 @@ h2 {
 }
 
 #message {
-  margin-top: 6px;
-  color: #526171;
+  display: none;
 }
 
 .actions,
@@ -134,6 +139,10 @@ h2 {
   color: #667789;
 }
 
+.stacked {
+  margin-top: 14px;
+}
+
 .label {
   display: inline-block;
   color: #667789;
@@ -144,6 +153,9 @@ h2 {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 14px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .platforms {
@@ -160,7 +172,10 @@ h2 {
 }
 
 .wide {
-  min-height: 380px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .section-head {
@@ -172,6 +187,8 @@ h2 {
 }
 
 .table-wrap {
+  min-height: 0;
+  flex: 1;
   overflow: auto;
   border: 1px solid #e0e6ed;
   border-radius: 6px;
@@ -241,6 +258,159 @@ tr:last-child td {
 
 .switch input:checked + span::after {
   transform: translateX(22px);
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(23, 32, 42, 0.36);
+}
+
+.modal-panel {
+  position: relative;
+  width: min(680px, calc(100vw - 36px));
+  margin: 64px auto 0;
+  background: #ffffff;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(19, 32, 46, 0.22);
+  padding: 18px;
+}
+
+.logs-panel {
+  width: min(860px, calc(100vw - 36px));
+}
+
+.logs-content {
+  max-height: min(68vh, 620px);
+  overflow: auto;
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid #d8e0e8;
+  border-radius: 6px;
+  background: #101820;
+  color: #e9f1f8;
+  font:
+    12px/1.55 Consolas,
+    "Cascadia Mono",
+    monospace;
+  white-space: pre-wrap;
+}
+
+.modal-head,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.icon-button {
+  min-width: 36px;
+  width: 36px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.manual-form {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.form-field {
+  display: block;
+}
+
+.platform-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.platform-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #cbd6e2;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.platform-picker input {
+  width: 16px;
+  height: 16px;
+}
+
+.image-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.image-picker span {
+  color: #667789;
+}
+
+.image-list {
+  display: grid;
+  gap: 8px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.image-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid #e0e6ed;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.image-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #526171;
+  font-size: 13px;
+}
+
+textarea {
+  width: 100%;
+  margin-top: 8px;
+  resize: vertical;
+  border: 1px solid #a9b7c7;
+  border-radius: 6px;
+  padding: 10px;
+  font: inherit;
+  color: #17202a;
+}
+
+.text-input {
+  width: 100%;
+  height: 38px;
+  margin-top: 8px;
+  border: 1px solid #a9b7c7;
+  border-radius: 6px;
+  padding: 0 10px;
+  font: inherit;
+  color: #17202a;
 }
 
 @media (max-width: 900px) {

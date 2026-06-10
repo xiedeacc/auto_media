@@ -28,7 +28,15 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                     }
                 });
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = handle.try_state::<crate::app::SharedState>() {
+                        state.controller.close_browser_tabs().await;
+                    }
+                    handle.exit(0);
+                });
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

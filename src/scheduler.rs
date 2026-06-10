@@ -143,4 +143,17 @@ impl Scheduler {
     pub async fn status(&self) -> RuntimeStatus {
         self.status.read().await.clone()
     }
+
+    pub async fn set_message_with_records(
+        &self,
+        state_name: &str,
+        message: String,
+        records: Vec<PlatformStatusRecord>,
+    ) {
+        let mut status = self.status.write().await;
+        status.state = state_name.to_string();
+        status.last_tick = Some(Utc::now().to_rfc3339());
+        status.last_message = message;
+        status.recent_platform_statuses = records;
+    }
 }

@@ -24,8 +24,8 @@ multi_image_policy = "first_by_name"
 
 [publish]
 title_pattern = "挑战千万美金 - {YYYYMMDD}"
-fallback_body_text = "一张图片"
-publish_platforms = ["xhs", "zhihu"]
+fallback_body_text = "挑战千万美金 - {YYYYMMDD}"
+publish_platforms = ["xhs", "zhihu", "twitter"]
 
 [platforms.xhs]
 enabled = true
@@ -42,7 +42,14 @@ login_url = "https://www.zhihu.com/signin"
 write_url = "https://zhuanlan.zhihu.com/write"
 cdp_port = 9224
 
+[platforms.twitter]
+enabled = true
+mode = "cdp"
+login_url = "https://x.com/i/flow/login"
+creator_url = "https://x.com"
+write_url = "https://x.com/home"
+cdp_port = 9225
+
 [startup]
 enabled = true
 minimize_to_tray_on_autostart = true
-

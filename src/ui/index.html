@@ -14,8 +14,10 @@
           <p id="message">加载中</p>
         </div>
         <div class="actions">
+          <button id="manual-post" type="button">手动发文</button>
           <button id="run-now" type="button">立即检测</button>
           <button id="pause-toggle" type="button">暂停</button>
+          <button id="logs-button" type="button">日志</button>
         </div>
       </header>
 
@@ -26,7 +28,9 @@
           <small id="last-tick">-</small>
         </article>
         <article class="panel">
-          <span class="label">下次唤醒</span>
+          <span class="label">最近检测</span>
+          <strong id="recent-check">-</strong>
+          <span class="label stacked">下次唤醒</span>
           <strong id="next-wakeup">-</strong>
           <small>每 10 分钟检测一次</small>
         </article>
@@ -57,6 +61,14 @@
               <small class="platform-status unknown" data-platform-status="zhihu">检测中</small>
             </div>
             <button data-login="zhihu" type="button">登录</button>
+          </article>
+          <article class="platform">
+            <div>
+              <span class="label">Twitter/X</span>
+              <strong>CDP</strong>
+              <small class="platform-status unknown" data-platform-status="twitter">检测中</small>
+            </div>
+            <button data-login="twitter" type="button">登录</button>
           </article>
         </div>
 
@@ -90,6 +102,65 @@
         </div>
       </section>
     </main>
+
+    <div id="manual-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-manual></div>
+      <section class="modal-panel">
+        <header class="modal-head">
+          <h2>手动发文</h2>
+          <button class="icon-button" data-close-manual type="button">×</button>
+        </header>
+        <div class="manual-form">
+          <div class="form-field">
+            <span class="label">平台</span>
+            <div class="platform-picker">
+              <label>
+                <input type="checkbox" name="manual-platform" value="xhs" checked />
+                <span>小红书</span>
+              </label>
+              <label>
+                <input type="checkbox" name="manual-platform" value="zhihu" checked />
+                <span>知乎</span>
+              </label>
+              <label>
+                <input type="checkbox" name="manual-platform" value="twitter" checked />
+                <span>Twitter/X</span>
+              </label>
+            </div>
+          </div>
+          <label>
+            <span class="label">标题</span>
+            <input id="manual-title" class="text-input" type="text" placeholder="输入文章标题" />
+          </label>
+          <div class="form-field">
+            <span class="label">图片</span>
+            <div class="image-picker">
+              <button id="select-images" type="button">添加图片</button>
+              <span id="image-count">未选择图片，可按 Ctrl+V 粘贴</span>
+            </div>
+          </div>
+          <div id="image-list" class="image-list"></div>
+          <label>
+            <span class="label">正文</span>
+            <textarea id="manual-text" rows="7" placeholder="输入图文正文"></textarea>
+          </label>
+        </div>
+        <footer class="modal-actions">
+          <button data-close-manual type="button">取消</button>
+          <button id="submit-manual" type="button">发送</button>
+        </footer>
+      </section>
+    </div>
+    <div id="logs-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-logs></div>
+      <section class="modal-panel logs-panel">
+        <header class="modal-head">
+          <h2>日志</h2>
+          <button class="icon-button" data-close-logs type="button">×</button>
+        </header>
+        <pre id="logs-content" class="logs-content">加载中</pre>
+      </section>
+    </div>
     <script src="./main.js"></script>
   </body>
 </html>

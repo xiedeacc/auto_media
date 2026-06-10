@@ -1,6 +1,9 @@
 mod cdp_adapter;
+mod twitter_api;
+mod xhs_api;
+mod zhihu_api;
 
-use crate::publish::job::PublishJob;
+use crate::publish::job::{ManualPublishJob, PublishJob};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -13,6 +16,7 @@ pub use cdp_adapter::CdpPlatformAdapter;
 pub enum Platform {
     Xhs,
     Zhihu,
+    Twitter,
 }
 
 impl Platform {
@@ -20,6 +24,7 @@ impl Platform {
         match self {
             Self::Xhs => "xhs",
             Self::Zhihu => "zhihu",
+            Self::Twitter => "twitter",
         }
     }
 }
@@ -37,6 +42,7 @@ impl FromStr for Platform {
         match value.to_ascii_lowercase().as_str() {
             "xhs" | "xiaohongshu" => Ok(Self::Xhs),
             "zhihu" => Ok(Self::Zhihu),
+            "twitter" | "x" => Ok(Self::Twitter),
             other => anyhow::bail!("unknown platform: {other}"),
         }
     }
@@ -77,4 +83,5 @@ pub trait PlatformAdapter: Send + Sync {
     async fn validate_session(&self) -> Result<SessionStatus>;
     async fn login_interactive(&self) -> Result<SessionStatus>;
     async fn publish_image_article(&self, job: &PublishJob) -> Result<PublishResult>;
+    async fn publish_manual_article(&self, job: &ManualPublishJob) -> Result<PublishResult>;
 }

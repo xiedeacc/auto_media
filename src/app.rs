@@ -1,8 +1,9 @@
 use crate::{
+    browser::cdp::CdpBrowser,
     commands,
     config::{load_or_create, AppConfig, RuntimePaths},
     platforms::{CdpPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
-    publish::Publisher,
+    publish::{job::ManualPublishJob, Publisher},
     scheduler::{RuntimeStatus, Scheduler},
     state::StateStore,
 };
@@ -19,6 +20,8 @@ pub struct SharedState {
 
 pub struct AppController {
     pub paths: RuntimePaths,
+    config: AppConfig,
+    state: Arc<StateStore>,
     scheduler: Scheduler,
     adapters: HashMap<Platform, Arc<dyn PlatformAdapter>>,
 }
@@ -46,14 +49,16 @@ impl AppController {
         let publisher = Arc::new(Publisher::new(
             config.clone(),
             paths.clone(),
-            state,
+            state.clone(),
             adapters.clone(),
         ));
         let status = Arc::new(RwLock::new(RuntimeStatus::default()));
-        let scheduler = Scheduler::new(config, publisher, status);
+        let scheduler = Scheduler::new(config.clone(), publisher, status);
 
         Ok(Self {
             paths,
+            config,
+            state,
             scheduler,
             adapters,
         })
@@ -73,7 +78,7 @@ impl AppController {
 
     pub async fn platform_sessions(&self) -> Vec<PlatformSessionSummary> {
         let mut sessions = Vec::new();
-        for platform in [Platform::Xhs, Platform::Zhihu] {
+        for platform in [Platform::Xhs, Platform::Zhihu, Platform::Twitter] {
             if let Some(adapter) = self.adapters.get(&platform) {
                 let status = adapter.validate_session().await.unwrap_or_else(|error| {
                     SessionStatus::NetworkError {
@@ -99,6 +104,76 @@ impl AppController {
         Ok(())
     }
 
+    pub async fn manual_publish(
+        &self,
+        title: String,
+        text: String,
+        image_paths: Vec<String>,
+        platforms: Option<Vec<String>>,
+    ) -> Result<String> {
+        let image_paths = image_paths.into_iter().map(Into::into).collect::<Vec<_>>();
+        let job = ManualPublishJob::new(title, text, image_paths)?;
+        let mut messages = Vec::new();
+        let platform_names = platforms
+            .filter(|platforms| !platforms.is_empty())
+            .unwrap_or_else(|| self.config.publish.publish_platforms.clone());
+
+        for platform_name in &platform_names {
+            let platform: Platform = platform_name.parse()?;
+            let Some(adapter) = self.adapters.get(&platform) else {
+                messages.push(format!("{platform}: 平台适配器未启用"));
+                continue;
+            };
+
+            match adapter.validate_session().await? {
+                SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
+                status => {
+                    let message = status.label().to_string();
+                    self.state.mark_platform(
+                        &job.job_id,
+                        platform,
+                        "failed",
+                        None,
+                        Some(&message),
+                    )?;
+                    messages.push(format!("{platform}: {message}"));
+                    continue;
+                }
+            }
+
+            match adapter.publish_manual_article(&job).await {
+                Ok(result) => {
+                    self.state.mark_platform(
+                        &job.job_id,
+                        platform,
+                        "success",
+                        result.remote_url.as_deref(),
+                        None,
+                    )?;
+                    messages.push(format!("{platform}: {}", result.message));
+                }
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    self.state.mark_platform(
+                        &job.job_id,
+                        platform,
+                        "failed",
+                        None,
+                        Some(&message),
+                    )?;
+                    messages.push(format!("{platform}: {message}"));
+                }
+            }
+        }
+
+        let message = messages.join("\n");
+        let records = self.state.recent_platform_statuses(30)?;
+        self.scheduler
+            .set_message_with_records("manual_publish", message.clone(), records)
+            .await;
+        Ok(message)
+    }
+
     pub fn scheduler(&self) -> Scheduler {
         self.scheduler.clone()
     }
@@ -110,6 +185,47 @@ impl AppController {
             conf: self.paths.conf_dir.display().to_string(),
             data: self.paths.data_dir.display().to_string(),
             logs: self.paths.logs_dir.display().to_string(),
+        }
+    }
+
+    pub async fn close_browser_tabs(&self) {
+        let browser = CdpBrowser::default();
+        for (platform, enabled, port) in [
+            (
+                Platform::Xhs,
+                self.config.platforms.xhs.enabled,
+                self.config.platforms.xhs.cdp_port,
+            ),
+            (
+                Platform::Zhihu,
+                self.config.platforms.zhihu.enabled,
+                self.config.platforms.zhihu.cdp_port,
+            ),
+            (
+                Platform::Twitter,
+                self.config.platforms.twitter.enabled,
+                self.config.platforms.twitter.cdp_port,
+            ),
+        ] {
+            if !enabled {
+                continue;
+            }
+
+            match browser.close_all_tabs(port).await {
+                Ok(count) if count > 0 => tracing::info!(
+                    platform = %platform,
+                    port,
+                    count,
+                    "closed browser tabs"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    platform = %platform,
+                    port,
+                    error = %error,
+                    "failed to close browser tabs"
+                ),
+            }
         }
     }
 }
@@ -127,6 +243,8 @@ pub fn run() -> Result<()> {
     };
     let launched_by_autostart = crate::startup::is_autostart_launch();
 
+    let close_controller = controller.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -136,6 +254,10 @@ pub fn run() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::run_now,
+            commands::select_images,
+            commands::save_pasted_image,
+            commands::manual_publish,
+            commands::get_logs,
             commands::set_paused,
             commands::login_platform,
             commands::set_autostart,
@@ -159,9 +281,13 @@ pub fn run() -> Result<()> {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(move |window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                let controller = close_controller.clone();
+                tauri::async_runtime::spawn(async move {
+                    controller.close_browser_tabs().await;
+                });
                 let _ = window.hide();
             }
         })
@@ -196,6 +322,18 @@ fn build_adapters(
                 config.platforms.zhihu.clone(),
                 paths.browser_profiles_dir.join("zhihu"),
                 paths.auth_dir.join("zhihu.cookies.enc"),
+            )),
+        );
+    }
+
+    if config.platforms.twitter.enabled {
+        adapters.insert(
+            Platform::Twitter,
+            Arc::new(CdpPlatformAdapter::new(
+                Platform::Twitter,
+                config.platforms.twitter.clone(),
+                paths.browser_profiles_dir.join("twitter"),
+                paths.auth_dir.join("twitter.cookies.enc"),
             )),
         );
     }

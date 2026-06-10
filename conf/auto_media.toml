@@ -5,7 +5,10 @@ single_instance = true
 [scheduler]
 timezone = "Asia/Shanghai"
 sleep_minutes = 10
-cutoff_time = "20:00:00"
+cutoff_time = "21:00:00"
+active_start_time = "20:00:00"
+active_end_time = "21:00:00"
+active_sleep_minutes = 3
 run_immediately_on_start = true
 
 [data]
@@ -20,7 +23,7 @@ image_patterns = [
   "{YYYY-MM-DD}*.png",
   "{YYYY-MM-DD}*.webp",
 ]
-multi_image_policy = "first_by_name"
+multi_image_policy = "newest"
 
 [publish]
 title_pattern = "挑战千万美金 - {YYYYMMDD}"

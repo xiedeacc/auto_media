@@ -52,6 +52,15 @@ impl Publisher {
     }
 
     pub async fn run_for_date(&self, target_date: NaiveDate) -> Result<TickReport> {
+        if self.state.has_success_for_target_date(target_date)? {
+            return Ok(TickReport {
+                target_date: target_date.to_string(),
+                message: "目标日期已成功发送，今日跳过检测".to_string(),
+                image_path: None,
+                platform_results: Vec::new(),
+            });
+        }
+
         let data_dir = resolve_configured_data_dir(&self.paths, &self.config);
         let scanner = ImageScanner::new(
             data_dir,

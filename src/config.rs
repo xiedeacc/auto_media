@@ -89,9 +89,37 @@ pub struct AppSection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerSection {
     pub timezone: String,
+    #[serde(default = "default_sleep_minutes")]
     pub sleep_minutes: u64,
+    #[serde(default = "default_cutoff_time")]
     pub cutoff_time: String,
+    #[serde(default = "default_active_start_time")]
+    pub active_start_time: String,
+    #[serde(default = "default_active_end_time")]
+    pub active_end_time: String,
+    #[serde(default = "default_active_sleep_minutes")]
+    pub active_sleep_minutes: u64,
     pub run_immediately_on_start: bool,
+}
+
+fn default_sleep_minutes() -> u64 {
+    10
+}
+
+fn default_cutoff_time() -> String {
+    "20:00:00".to_string()
+}
+
+fn default_active_start_time() -> String {
+    "20:00:00".to_string()
+}
+
+fn default_active_end_time() -> String {
+    "21:00:00".to_string()
+}
+
+fn default_active_sleep_minutes() -> u64 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,7 +189,10 @@ impl Default for AppConfig {
             scheduler: SchedulerSection {
                 timezone: "Asia/Shanghai".to_string(),
                 sleep_minutes: 10,
-                cutoff_time: "20:00:00".to_string(),
+                cutoff_time: "21:00:00".to_string(),
+                active_start_time: "20:00:00".to_string(),
+                active_end_time: "21:00:00".to_string(),
+                active_sleep_minutes: 3,
                 run_immediately_on_start: true,
             },
             data: DataSection {
@@ -176,7 +207,7 @@ impl Default for AppConfig {
                     "{YYYY-MM-DD}*.png".to_string(),
                     "{YYYY-MM-DD}*.webp".to_string(),
                 ],
-                multi_image_policy: MultiImagePolicy::FirstByName,
+                multi_image_policy: MultiImagePolicy::Newest,
             },
             publish: PublishSection {
                 title_pattern: "挑战千万美金 - {YYYYMMDD}".to_string(),

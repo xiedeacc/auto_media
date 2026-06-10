@@ -62,8 +62,10 @@ impl Scheduler {
         }
 
         loop {
-            let sleep_duration =
-                Duration::from_secs(self.config.scheduler.sleep_minutes.saturating_mul(60));
+            let sleep_duration = self.next_sleep_duration().unwrap_or_else(|error| {
+                tracing::error!(?error, "calculate next sleep duration failed");
+                Duration::from_secs(self.config.scheduler.sleep_minutes.saturating_mul(60))
+            });
             {
                 let mut status = self.status.write().await;
                 status.next_wakeup = Some(
@@ -97,22 +99,25 @@ impl Scheduler {
             .parse()
             .unwrap_or(chrono_tz::Asia::Shanghai);
         let now = Utc::now().with_timezone(&tz);
-        let cutoff = NaiveTime::parse_from_str(&self.config.scheduler.cutoff_time, "%H:%M:%S")
-            .context("parse cutoff_time")?;
+        let (active_start, active_end) = self.active_window()?;
+
+        {
+            let mut status = self.status.write().await;
+            status.last_tick = Some(now.to_rfc3339());
+        }
+
+        if !is_in_active_window(now.time(), active_start, active_end) {
+            let mut status = self.status.write().await;
+            status.state = "sleeping".to_string();
+            status.last_message = format!("当前不在检测窗口 {active_start}-{active_end}，跳过扫描");
+            status.recent_platform_statuses = self.publisher.recent_statuses().unwrap_or_default();
+            return Ok(());
+        }
 
         {
             let mut status = self.status.write().await;
             status.state = "scanning".to_string();
-            status.last_tick = Some(now.to_rfc3339());
             status.last_message = format!("开始检测: {reason}");
-        }
-
-        if now.time() >= cutoff {
-            let mut status = self.status.write().await;
-            status.state = "sleeping".to_string();
-            status.last_message = "已过 20:00，跳过扫描".to_string();
-            status.recent_platform_statuses = self.publisher.recent_statuses().unwrap_or_default();
-            return Ok(());
         }
 
         let target_date = now
@@ -156,4 +161,53 @@ impl Scheduler {
         status.last_message = message;
         status.recent_platform_statuses = records;
     }
+
+    fn active_window(&self) -> Result<(NaiveTime, NaiveTime)> {
+        let active_start =
+            NaiveTime::parse_from_str(&self.config.scheduler.active_start_time, "%H:%M:%S")
+                .context("parse active_start_time")?;
+        let active_end =
+            NaiveTime::parse_from_str(&self.config.scheduler.active_end_time, "%H:%M:%S")
+                .context("parse active_end_time")?;
+        Ok((active_start, active_end))
+    }
+
+    fn next_sleep_duration(&self) -> Result<Duration> {
+        let tz: Tz = self
+            .config
+            .scheduler
+            .timezone
+            .parse()
+            .unwrap_or(chrono_tz::Asia::Shanghai);
+        let now = Utc::now().with_timezone(&tz);
+        let (active_start, active_end) = self.active_window()?;
+        let now_time = now.time();
+
+        if is_in_active_window(now_time, active_start, active_end) {
+            let active_seconds = self
+                .config
+                .scheduler
+                .active_sleep_minutes
+                .max(1)
+                .saturating_mul(60);
+            let end_at = now.date_naive().and_time(active_end);
+            let seconds_until_end = (end_at - now.naive_local()).num_seconds().max(1) as u64;
+            return Ok(Duration::from_secs(active_seconds.min(seconds_until_end)));
+        }
+
+        let target_date = if now_time < active_start {
+            now.date_naive()
+        } else {
+            now.date_naive()
+                .checked_add_days(Days::new(1))
+                .context("calculate next active date")?
+        };
+        let next_active_start = target_date.and_time(active_start);
+        let seconds = (next_active_start - now.naive_local()).num_seconds().max(1) as u64;
+        Ok(Duration::from_secs(seconds))
+    }
+}
+
+fn is_in_active_window(now: NaiveTime, active_start: NaiveTime, active_end: NaiveTime) -> bool {
+    now >= active_start && now < active_end
 }

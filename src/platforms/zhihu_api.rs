@@ -201,10 +201,10 @@ impl ZhihuSession {
     ) -> Result<Value> {
         let draft_id = self.create_content_draft(client).await?;
         let topic_names = extract_tag_names(body);
-        let mut topics = Vec::new();
+        let mut topic_ids = Vec::new();
         for name in &topic_names {
-            if let Some(topic) = self.search_topic(client, name).await? {
-                topics.push(topic);
+            if let Some(topic_id) = self.search_topic_id(client, name).await? {
+                topic_ids.push(topic_id);
             }
         }
         let html = format!(
@@ -217,10 +217,10 @@ impl ZhihuSession {
             "data": {
                 "title": { "title": title },
                 "hybrid": { "html": html, "textLength": body.chars().count() },
+                "topic": { "topics": topic_ids },
                 "extra_info": { "publisher": "pc" },
                 "draft": { "disabled": 1, "id": draft_id },
-                "commentsPermission": { "comment_permission": "anyone" },
-                "topics": topics
+                "commentsPermission": { "comment_permission": "anyone" }
             }
         });
         let response = client
@@ -234,23 +234,31 @@ impl ZhihuSession {
         handle_response(response).await
     }
 
-    async fn search_topic(&self, client: &reqwest::Client, name: &str) -> Result<Option<Value>> {
+    async fn search_topic_id(
+        &self,
+        client: &reqwest::Client,
+        name: &str,
+    ) -> Result<Option<String>> {
         let response = client
             .get(format!("{API_V4}/search_v3"))
             .headers(self.headers()?)
             .query(&[
-                ("t", "general"),
+                ("gk_version", "gz-gaokao"),
+                ("t", "topic"),
                 ("q", name),
                 ("correction", "1"),
                 ("offset", "0"),
                 ("limit", "20"),
-                ("show_all_topics", "1"),
+                ("filter_fields", "lc_idx"),
+                ("lc_idx", "0"),
+                ("show_all_topics", "0"),
+                ("search_source", "Normal"),
             ])
             .send()
             .await
             .with_context(|| format!("知乎搜索话题失败: {name}"))?;
         let value = handle_response(response).await?;
-        Ok(find_topic_candidate(&value, name))
+        Ok(find_topic_id_candidate(&value, name))
     }
 
     async fn create_content_draft(&self, client: &reqwest::Client) -> Result<String> {
@@ -356,7 +364,7 @@ fn extract_tag_names(body: &str) -> Vec<String> {
     tags
 }
 
-fn find_topic_candidate(value: &Value, name: &str) -> Option<Value> {
+fn find_topic_id_candidate(value: &Value, name: &str) -> Option<String> {
     let mut candidates = Vec::new();
     collect_topic_candidates(value, &mut candidates);
     candidates
@@ -369,7 +377,13 @@ fn find_topic_candidate(value: &Value, name: &str) -> Option<Value> {
                 .unwrap_or(false)
         })
         .or_else(|| candidates.first())
-        .cloned()
+        .and_then(|topic| {
+            topic.get("id").and_then(|id| {
+                id.as_str()
+                    .map(ToString::to_string)
+                    .or_else(|| id.as_i64().map(|value| value.to_string()))
+            })
+        })
 }
 
 fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {
@@ -378,11 +392,7 @@ fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {
             let type_is_topic = map.get("type").and_then(Value::as_str) == Some("topic");
             let has_topic_shape = map.get("id").is_some() && map.get("name").is_some();
             if type_is_topic && has_topic_shape {
-                candidates.push(json!({
-                    "id": map.get("id").cloned().unwrap_or(Value::Null),
-                    "name": map.get("name").cloned().unwrap_or(Value::Null),
-                    "type": "topic"
-                }));
+                candidates.push(value.clone());
             }
             for child in map.values() {
                 collect_topic_candidates(child, candidates);
@@ -461,8 +471,7 @@ mod tests {
                 { "object": { "type": "topic", "id": "123", "name": "美股" } }
             ]
         });
-        let topic = find_topic_candidate(&value, "美股").unwrap();
-        assert_eq!(topic["id"], "123");
-        assert_eq!(topic["name"], "美股");
+        let topic_id = find_topic_id_candidate(&value, "美股").unwrap();
+        assert_eq!(topic_id, "123");
     }
 }

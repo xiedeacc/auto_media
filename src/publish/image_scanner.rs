@@ -90,29 +90,31 @@ impl ImageScanner {
         file_name: &str,
         target_date: NaiveDate,
     ) -> Option<Option<NaiveDateTime>> {
-        let compact = target_date.format("%Y%m%d").to_string();
-        let dashed = target_date.format("%Y-%m-%d").to_string();
         let lower = file_name.to_ascii_lowercase();
 
         if !is_supported_image(&lower) {
             return None;
         }
 
-        if let Some(captured_at) = extract_embedded_timestamp(file_name) {
+        for captured_at in extract_embedded_timestamps(file_name) {
             if captured_at.date() == target_date {
-                return Some(Some(captured_at));
+                let timestamp = captured_at.format("%Y%m%d%H%M%S").to_string();
+                if self.patterns.iter().any(|pattern| {
+                    let expanded = expand_pattern(pattern, target_date, Some(&timestamp));
+                    wildcard_match(&expanded.to_ascii_lowercase(), &lower)
+                }) {
+                    return Some(Some(captured_at));
+                }
             }
-            return None;
         }
 
         let matches_prefix = self.patterns.iter().any(|pattern| {
-            let expanded = pattern
-                .replace("{YYYYMMDD}", &compact)
-                .replace("{YYYY-MM-DD}", &dashed)
-                .replace('*', "");
-            lower.starts_with(&expanded.to_ascii_lowercase())
-        }) || lower.starts_with(&compact)
-            || lower.starts_with(&dashed);
+            if pattern.contains("{YYYYMMDDHHMMSS}") {
+                return false;
+            }
+            let expanded = expand_pattern(pattern, target_date, None);
+            wildcard_match(&expanded.to_ascii_lowercase(), &lower)
+        });
 
         matches_prefix.then_some(None)
     }
@@ -125,25 +127,71 @@ fn compare_newest_first(a: &TargetImage, b: &TargetImage) -> std::cmp::Ordering 
         .then_with(|| b.path.cmp(&a.path))
 }
 
-fn extract_embedded_timestamp(file_name: &str) -> Option<NaiveDateTime> {
-    let bytes = file_name.as_bytes();
-    if bytes.len() < 14 {
-        return None;
+fn expand_pattern(pattern: &str, target_date: NaiveDate, timestamp: Option<&str>) -> String {
+    pattern
+        .replace("{YYYYMMDDHHMMSS}", timestamp.unwrap_or(""))
+        .replace("{YYYYMMDD}", &target_date.format("%Y%m%d").to_string())
+        .replace("{YYYY-MM-DD}", &target_date.format("%Y-%m-%d").to_string())
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let mut pattern_index = 0;
+    let mut value_index = 0;
+    let mut star_index = None;
+    let mut star_value_index = 0;
+
+    while value_index < value.len() {
+        if pattern_index < pattern.len() && pattern[pattern_index] == value[value_index] {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(star) = star_index {
+            pattern_index = star + 1;
+            star_value_index += 1;
+            value_index = star_value_index;
+        } else {
+            return false;
+        }
     }
 
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+
+    pattern_index == pattern.len()
+}
+
+fn extract_embedded_timestamps(file_name: &str) -> Vec<NaiveDateTime> {
+    let bytes = file_name.as_bytes();
+    if bytes.len() < 14 {
+        return Vec::new();
+    }
+
+    let mut timestamps = Vec::new();
     for start in 0..=bytes.len() - 14 {
         let candidate = &bytes[start..start + 14];
         if !candidate.iter().all(u8::is_ascii_digit) {
             continue;
         }
 
-        let text = std::str::from_utf8(candidate).ok()?;
-        let date = NaiveDate::parse_from_str(&text[..8], "%Y%m%d").ok()?;
-        let time = NaiveTime::parse_from_str(&text[8..], "%H%M%S").ok()?;
-        return Some(date.and_time(time));
+        let Ok(text) = std::str::from_utf8(candidate) else {
+            continue;
+        };
+        let Ok(date) = NaiveDate::parse_from_str(&text[..8], "%Y%m%d") else {
+            continue;
+        };
+        let Ok(time) = NaiveTime::parse_from_str(&text[8..], "%H%M%S") else {
+            continue;
+        };
+        timestamps.push(date.and_time(time));
     }
 
-    None
+    timestamps
 }
 
 fn is_supported_image(file_name: &str) -> bool {
@@ -185,7 +233,7 @@ mod tests {
 
         let scanner = ImageScanner::new(
             dir.clone(),
-            vec!["{YYYYMMDD}*.png".to_string()],
+            vec!["*{YYYYMMDDHHMMSS}*.png".to_string()],
             MultiImagePolicy::Newest,
         );
         let image = scanner
@@ -207,7 +255,11 @@ mod tests {
         fs::write(dir.join("微信图片_20260610210646_374_15.png"), b"image").unwrap();
         fs::write(dir.join("微信图片_20260610190646_374_13.png"), b"image").unwrap();
 
-        let scanner = ImageScanner::new(dir.clone(), vec![], MultiImagePolicy::Error);
+        let scanner = ImageScanner::new(
+            dir.clone(),
+            vec!["*{YYYYMMDDHHMMSS}*.png".to_string()],
+            MultiImagePolicy::Error,
+        );
         let image = scanner
             .find_target_image(NaiveDate::from_ymd_opt(2026, 6, 10).unwrap())
             .unwrap()
@@ -216,6 +268,28 @@ mod tests {
         assert_eq!(
             image.path.file_name().unwrap(),
             "微信图片_20260610210646_374_15.png"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn matches_timestamp_pattern_with_case_insensitive_extension() {
+        let dir = make_temp_dir("uppercase_extension");
+        fs::write(dir.join("微信图片_20260610200646_374_14.PNG"), b"image").unwrap();
+
+        let scanner = ImageScanner::new(
+            dir.clone(),
+            vec!["*{YYYYMMDDHHMMSS}*.png".to_string()],
+            MultiImagePolicy::Newest,
+        );
+        let image = scanner
+            .find_target_image(NaiveDate::from_ymd_opt(2026, 6, 10).unwrap())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            image.path.file_name().unwrap(),
+            "微信图片_20260610200646_374_14.PNG"
         );
         let _ = fs::remove_dir_all(dir);
     }

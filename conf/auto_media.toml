@@ -14,14 +14,10 @@ run_immediately_on_start = true
 [data]
 dir = "data"
 image_patterns = [
-  "{YYYYMMDD}*.jpg",
-  "{YYYYMMDD}*.jpeg",
-  "{YYYYMMDD}*.png",
-  "{YYYYMMDD}*.webp",
-  "{YYYY-MM-DD}*.jpg",
-  "{YYYY-MM-DD}*.jpeg",
-  "{YYYY-MM-DD}*.png",
-  "{YYYY-MM-DD}*.webp",
+  "*{YYYYMMDDHHMMSS}*.jpg",
+  "*{YYYYMMDDHHMMSS}*.jpeg",
+  "*{YYYYMMDDHHMMSS}*.png",
+  "*{YYYYMMDDHHMMSS}*.webp",
 ]
 multi_image_policy = "newest"
 

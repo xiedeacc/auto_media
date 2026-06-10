@@ -198,14 +198,10 @@ impl Default for AppConfig {
             data: DataSection {
                 dir: "data".to_string(),
                 image_patterns: vec![
-                    "{YYYYMMDD}*.jpg".to_string(),
-                    "{YYYYMMDD}*.jpeg".to_string(),
-                    "{YYYYMMDD}*.png".to_string(),
-                    "{YYYYMMDD}*.webp".to_string(),
-                    "{YYYY-MM-DD}*.jpg".to_string(),
-                    "{YYYY-MM-DD}*.jpeg".to_string(),
-                    "{YYYY-MM-DD}*.png".to_string(),
-                    "{YYYY-MM-DD}*.webp".to_string(),
+                    "*{YYYYMMDDHHMMSS}*.jpg".to_string(),
+                    "*{YYYYMMDDHHMMSS}*.jpeg".to_string(),
+                    "*{YYYYMMDDHHMMSS}*.png".to_string(),
+                    "*{YYYYMMDDHHMMSS}*.webp".to_string(),
                 ],
                 multi_image_policy: MultiImagePolicy::Newest,
             },

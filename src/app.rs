@@ -72,6 +72,14 @@ impl AppController {
         self.scheduler.set_paused(paused).await;
     }
 
+    pub async fn clear_records(&self) -> Result<()> {
+        self.state.clear_publish_records()?;
+        self.scheduler
+            .set_message_with_records("idle", "最近任务已清空".to_string(), Vec::new())
+            .await;
+        Ok(())
+    }
+
     pub async fn status(&self) -> RuntimeStatus {
         self.scheduler.status().await
     }
@@ -276,6 +284,7 @@ pub fn run() -> Result<()> {
             commands::save_pasted_image,
             commands::manual_publish,
             commands::get_logs,
+            commands::clear_records,
             commands::set_paused,
             commands::login_platform,
             commands::set_autostart,

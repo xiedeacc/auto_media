@@ -212,4 +212,11 @@ impl StateStore {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    pub fn clear_publish_records(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("state mutex poisoned");
+        conn.execute("DELETE FROM publish_platform_status", [])?;
+        conn.execute("DELETE FROM publish_jobs", [])?;
+        Ok(())
+    }
 }

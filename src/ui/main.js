@@ -10,6 +10,7 @@ const els = {
   runNow: document.querySelector("#run-now"),
   pauseToggle: document.querySelector("#pause-toggle"),
   logsButton: document.querySelector("#logs-button"),
+  clearRecords: document.querySelector("#clear-records"),
   autostart: document.querySelector("#autostart"),
   records: document.querySelector("#records"),
   manualModal: document.querySelector("#manual-modal"),
@@ -257,6 +258,23 @@ els.runNow.addEventListener("click", async () => {
 
 els.manualPost.addEventListener("click", openManualModal);
 els.logsButton.addEventListener("click", openLogsModal);
+
+els.clearRecords.addEventListener("click", async () => {
+  if (busy) return;
+  const confirmed = window.confirm("确定清空所有最近任务记录？");
+  if (!confirmed) return;
+  busy = true;
+  els.clearRecords.disabled = true;
+  try {
+    await call("clear_records");
+    await refresh();
+  } catch (error) {
+    showError(error);
+  } finally {
+    busy = false;
+    els.clearRecords.disabled = false;
+  }
+});
 
 document.querySelectorAll("[data-close-manual]").forEach((node) => {
   node.addEventListener("click", closeManualModal);

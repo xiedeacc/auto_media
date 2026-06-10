@@ -120,6 +120,15 @@ pub async fn get_logs(
     Ok(selected.join("\n"))
 }
 
+#[tauri::command]
+pub async fn clear_records(state: State<'_, SharedState>) -> Result<(), String> {
+    state
+        .controller
+        .clear_records()
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn image_extension(file_name: &str) -> Option<&'static str> {
     let lower = file_name.to_ascii_lowercase();
     if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {

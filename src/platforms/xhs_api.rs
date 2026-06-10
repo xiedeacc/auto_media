@@ -157,6 +157,14 @@ impl XhsSession {
             "notePostTiming": { "postTime": Value::Null },
             "noteCollectionBind": { "id": "" }
         });
+        let topics = extract_topic_names(desc);
+        let mut hash_tags = Vec::new();
+        for topic in &topics {
+            if let Some(tag) = self.search_topic(client, topic, title, desc).await? {
+                hash_tags.push(tag);
+            }
+        }
+        let desc = render_xhs_desc(desc, &topics);
         let data = json!({
             "common": {
                 "type": "normal",
@@ -166,7 +174,7 @@ impl XhsSession {
                 "source": "{\"type\":\"web\",\"ids\":\"\",\"extraInfo\":\"{\\\"subType\\\":\\\"official\\\"}\"}",
                 "business_binds": serde_json::to_string(&business_binds)?,
                 "ats": [],
-                "hash_tag": [],
+                "hash_tag": hash_tags,
                 "post_loc": {},
                 "privacy_info": { "op_type": 1, "type": 0 }
             },
@@ -176,6 +184,31 @@ impl XhsSession {
         self.main_api_post(client, "/web_api/sns/v2/note", data)
             .await
             .context("调用小红书发布接口失败")
+    }
+
+    async fn search_topic(
+        &self,
+        client: &reqwest::Client,
+        topic: &str,
+        title: &str,
+        desc: &str,
+    ) -> Result<Option<Value>> {
+        let data = json!({
+            "keyword": topic,
+            "suggest_topic_request": {
+                "title": title,
+                "desc": desc
+            },
+            "page": {
+                "page_size": 20,
+                "page": 1
+            }
+        });
+        let response = self
+            .main_api_post(client, "/web_api/sns/v1/search/topic", data)
+            .await
+            .with_context(|| format!("搜索小红书话题失败: {topic}"))?;
+        Ok(find_topic_candidate(&response, topic))
     }
 
     async fn creator_get(
@@ -290,6 +323,110 @@ fn host_for_uri(uri: &str) -> &'static str {
         CREATOR_HOST
     } else {
         EDITH_HOST
+    }
+}
+
+fn extract_topic_names(desc: &str) -> Vec<String> {
+    let mut topics = Vec::new();
+    let Some(tag_line) = desc.lines().rev().find(|line| !line.trim().is_empty()) else {
+        return topics;
+    };
+    for raw in tag_line.split_whitespace() {
+        let topic = raw
+            .trim()
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    ',' | '，' | '.' | '。' | ';' | '；' | ':' | '：' | '!' | '！'
+                )
+            })
+            .trim_start_matches('#')
+            .trim();
+        if topic.is_empty() {
+            continue;
+        }
+        let looks_like_tag = raw.trim_start().starts_with('#')
+            || tag_line.split_whitespace().count() > 1 && tag_line.chars().count() <= 200;
+        if !looks_like_tag {
+            continue;
+        }
+        if !topics.iter().any(|existing| existing == topic) {
+            topics.push(topic.to_string());
+        }
+    }
+    topics
+}
+
+fn render_xhs_desc(desc: &str, topics: &[String]) -> String {
+    if topics.is_empty() {
+        return desc.to_string();
+    }
+    let topic_line = topics
+        .iter()
+        .map(|topic| format!("\u{feff}#{topic}[话题]#\u{feff}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut lines = desc.lines().collect::<Vec<_>>();
+    if lines
+        .last()
+        .map(|line| {
+            let tokens = line.split_whitespace().collect::<Vec<_>>();
+            !tokens.is_empty()
+                && tokens.iter().all(|token| {
+                    let normalized = token.trim_start_matches('#');
+                    topics.iter().any(|topic| topic == normalized)
+                })
+        })
+        .unwrap_or(false)
+    {
+        lines.pop();
+    }
+    let body = lines.join("\n").trim().to_string();
+    if body.is_empty() {
+        topic_line
+    } else {
+        format!("{body}\n\n{topic_line}")
+    }
+}
+
+fn find_topic_candidate(value: &Value, topic: &str) -> Option<Value> {
+    let mut candidates = Vec::new();
+    collect_topic_candidates(value, &mut candidates);
+    candidates
+        .iter()
+        .find(|candidate| {
+            candidate
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| name == topic)
+                .unwrap_or(false)
+        })
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            let has_required = map.get("id").and_then(Value::as_str).is_some()
+                && map.get("name").and_then(Value::as_str).is_some();
+            if has_required {
+                let mut topic = value.clone();
+                if topic.get("type").is_none() {
+                    topic["type"] = Value::String("topic".to_string());
+                }
+                candidates.push(topic);
+            }
+            for child in map.values() {
+                collect_topic_candidates(child, candidates);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_topic_candidates(child, candidates);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -637,5 +774,34 @@ fn compact_json(value: &Value) -> String {
         format!("{}...", text.chars().take(300).collect::<String>())
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xhs_topics_are_extracted_from_last_tag_line() {
+        let desc = "正文第一行\n\n#投资理财 #美股 富途";
+        assert_eq!(extract_topic_names(desc), vec!["投资理财", "美股", "富途"]);
+    }
+
+    #[test]
+    fn xhs_desc_replaces_plain_tag_line_with_topic_markup() {
+        let desc = "正文第一行\n\n#投资理财 #美股 富途";
+        let rendered = render_xhs_desc(
+            desc,
+            &[
+                "投资理财".to_string(),
+                "美股".to_string(),
+                "富途".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            rendered,
+            "正文第一行\n\n\u{feff}#投资理财[话题]#\u{feff} \u{feff}#美股[话题]#\u{feff} \u{feff}#富途[话题]#\u{feff}"
+        );
     }
 }

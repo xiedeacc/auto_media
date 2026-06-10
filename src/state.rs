@@ -66,6 +66,32 @@ impl StateStore {
             );
             "#,
         )?;
+        self.migrate_attempt_count_v2(&conn)?;
+        Ok(())
+    }
+
+    fn migrate_attempt_count_v2(&self, conn: &Connection) -> Result<()> {
+        let applied: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM app_kv WHERE key = 'migration_attempt_count_v2'",
+            [],
+            |row| row.get(0),
+        )?;
+        if applied > 0 {
+            return Ok(());
+        }
+
+        conn.execute(
+            "UPDATE publish_platform_status SET attempt_count = 1 WHERE attempt_count > 1",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO app_kv (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            params![
+                "migration_attempt_count_v2",
+                "applied",
+                Utc::now().to_rfc3339()
+            ],
+        )?;
         Ok(())
     }
 
@@ -132,6 +158,7 @@ impl StateStore {
         last_error: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().expect("state mutex poisoned");
+        let attempt_increment = if status == "publishing" { 1 } else { 0 };
         conn.execute(
             r#"
             INSERT INTO publish_platform_status
@@ -141,7 +168,10 @@ impl StateStore {
               status = excluded.status,
               remote_url = excluded.remote_url,
               last_error = excluded.last_error,
-              attempt_count = publish_platform_status.attempt_count + 1,
+              attempt_count = CASE
+                WHEN ?7 = 1 THEN publish_platform_status.attempt_count + 1
+                ELSE publish_platform_status.attempt_count
+              END,
               updated_at = excluded.updated_at
             "#,
             params![
@@ -151,6 +181,7 @@ impl StateStore {
                 remote_url,
                 last_error,
                 Utc::now().to_rfc3339(),
+                attempt_increment,
             ],
         )?;
         Ok(())

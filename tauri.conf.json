@@ -13,9 +13,9 @@
         "label": "main",
         "title": "Auto Media",
         "width": 1040,
-        "height": 720,
+        "height": 860,
         "minWidth": 900,
-        "minHeight": 620
+        "minHeight": 760
       }
     ],
     "security": {
@@ -27,4 +27,3 @@
     "targets": "all"
   }
 }
-

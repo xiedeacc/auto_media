@@ -279,12 +279,16 @@ tr:last-child td {
 .modal-panel {
   position: relative;
   width: min(680px, calc(100vw - 36px));
-  margin: 64px auto 0;
+  max-height: calc(100vh - 48px);
+  margin: 24px auto 0;
   background: #ffffff;
   border: 1px solid #d8e0e8;
   border-radius: 8px;
   box-shadow: 0 18px 50px rgba(19, 32, 46, 0.22);
   padding: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .logs-panel {
@@ -326,6 +330,9 @@ tr:last-child td {
   display: grid;
   gap: 14px;
   margin: 18px 0;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .form-field {

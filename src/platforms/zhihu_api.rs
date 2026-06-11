@@ -1,4 +1,4 @@
-use crate::browser::cdp::BrowserCookie;
+use crate::{browser::cdp::BrowserCookie, topic_cache};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
@@ -8,9 +8,11 @@ use sha1::Sha1;
 use std::path::{Path, PathBuf};
 
 const API_V4: &str = "https://www.zhihu.com/api/v4";
+const ZHUANLAN_API: &str = "https://zhuanlan.zhihu.com/api";
 const IMAGE_API: &str = "https://api.zhihu.com/images";
 const OSS_UPLOAD_URL: &str = "https://zhihu-pics-upload.zhimg.com";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+const MAX_ARTICLE_TOPICS: usize = 3;
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -19,12 +21,16 @@ pub async fn publish_image_article(
     title: &str,
     body: &str,
     image_paths: &[PathBuf],
+    topic_cache_path: Option<&Path>,
 ) -> Result<String> {
     if body.chars().count() < 9 {
         anyhow::bail!("知乎正文至少需要 9 个字");
     }
     let session = ZhihuSession::new(cookies)?;
     let client = reqwest::Client::builder().no_proxy().build()?;
+    let topics = session
+        .resolve_topics(&client, body, topic_cache_path)
+        .await?;
     let mut image_infos = Vec::new();
     for path in image_paths {
         image_infos.push(session.upload_image(&client, path).await?);
@@ -32,7 +38,35 @@ pub async fn publish_image_article(
     let response = session
         .create_article(&client, title, body, &image_infos)
         .await?;
-    Ok(format!("知乎 API 已提交发布：{}", compact_json(&response)))
+    let mut message = format!("知乎 API 已提交发布：{}", compact_json(&response));
+    if !topics.is_empty() {
+        if let Some(article_id) = extract_article_id(&response) {
+            match session
+                .sync_article_topics(&client, &article_id, &topics)
+                .await
+            {
+                Ok(_) => {
+                    message.push_str(&format!("；已同步 {} 个知乎话题", topics.len()));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        article_id = %article_id,
+                        topic_count = topics.len(),
+                        error = %error,
+                        "zhihu article topic sync failed after publish"
+                    );
+                    message.push_str(&format!("；文章已发布，但知乎话题同步失败：{error:#}"));
+                }
+            }
+        } else {
+            tracing::warn!(
+                response = %compact_json(&response),
+                "zhihu article id missing, topic sync skipped"
+            );
+            message.push_str("；文章已发布，但响应缺少文章 id，未同步知乎话题");
+        }
+    }
+    Ok(message)
 }
 
 struct ZhihuSession {
@@ -200,14 +234,6 @@ impl ZhihuSession {
         image_infos: &[ImageInfo],
     ) -> Result<Value> {
         let draft_id = self.create_content_draft(client).await?;
-        let topic_names = extract_tag_names(body);
-        let mut topic_ids = Vec::new();
-        for name in &topic_names {
-            if let Some(topic_id) = self.search_topic_id(client, name).await? {
-                topic_ids.push(topic_id);
-                break;
-            }
-        }
         let html = format!(
             "<p>{}</p>{}",
             html_escape(body),
@@ -218,7 +244,6 @@ impl ZhihuSession {
             "data": {
                 "title": { "title": title },
                 "hybrid": { "html": html, "textLength": body.chars().count() },
-                "topic": { "topics": topic_ids },
                 "extra_info": { "publisher": "pc" },
                 "draft": { "disabled": 1, "id": draft_id },
                 "commentsPermission": { "comment_permission": "anyone" }
@@ -235,11 +260,41 @@ impl ZhihuSession {
         handle_response(response).await
     }
 
-    async fn search_topic_id(
+    async fn resolve_topics(
+        &self,
+        client: &reqwest::Client,
+        body: &str,
+        topic_cache_path: Option<&Path>,
+    ) -> Result<Vec<topic_cache::ZhihuTopicEntry>> {
+        let mut topics: Vec<topic_cache::ZhihuTopicEntry> = Vec::new();
+        for name in extract_tag_names(body).into_iter().take(MAX_ARTICLE_TOPICS) {
+            if let Some(topic) = self.search_topic(client, &name, topic_cache_path).await? {
+                if !topics.iter().any(|existing| existing.id == topic.id) {
+                    topics.push(topic);
+                }
+            }
+        }
+        Ok(topics)
+    }
+
+    async fn search_topic(
         &self,
         client: &reqwest::Client,
         name: &str,
-    ) -> Result<Option<String>> {
+        topic_cache_path: Option<&Path>,
+    ) -> Result<Option<topic_cache::ZhihuTopicEntry>> {
+        if let Some(path) = topic_cache_path {
+            match topic_cache::get_zhihu(path, name) {
+                Ok(Some(cached)) => return Ok(Some(cached)),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    topic = name,
+                    error = %error,
+                    "failed to read zhihu topic cache"
+                ),
+            }
+        }
+
         let response = client
             .get(format!("{API_V4}/search_v3"))
             .headers(self.headers()?)
@@ -259,7 +314,43 @@ impl ZhihuSession {
             .await
             .with_context(|| format!("知乎搜索话题失败: {name}"))?;
         let value = handle_response(response).await?;
-        Ok(find_topic_id_candidate(&value, name))
+        let topic = find_topic_candidate(&value, name);
+        if let (Some(path), Some(topic)) = (topic_cache_path, topic.as_ref()) {
+            if let Err(error) = topic_cache::set_zhihu(path, &topic.name, &topic.id) {
+                tracing::warn!(
+                    topic = name,
+                    error = %error,
+                    "failed to write zhihu topic cache"
+                );
+            }
+        }
+        Ok(topic)
+    }
+
+    async fn sync_article_topics(
+        &self,
+        client: &reqwest::Client,
+        article_id: &str,
+        topics: &[topic_cache::ZhihuTopicEntry],
+    ) -> Result<Value> {
+        let headers = self.zhuanlan_headers(article_id)?;
+        let mut last = Value::Null;
+        for topic in topics {
+            let response = client
+                .post(format!("{ZHUANLAN_API}/articles/{article_id}/topics"))
+                .headers(headers.clone())
+                .json(&json!({
+                    "url": format!("{API_V4}/topics/{}", topic.id),
+                    "type": "topic",
+                    "id": topic.id,
+                    "name": topic.name,
+                }))
+                .send()
+                .await
+                .with_context(|| format!("知乎添加文章话题失败: {}", topic.name))?;
+            last = handle_response(response).await?;
+        }
+        Ok(last)
     }
 
     async fn create_content_draft(&self, client: &reqwest::Client) -> Result<String> {
@@ -299,6 +390,19 @@ impl ZhihuSession {
         );
         Ok(headers)
     }
+
+    fn zhuanlan_headers(&self, article_id: &str) -> Result<HeaderMap> {
+        let mut headers = self.headers()?;
+        headers.insert(
+            "referer",
+            HeaderValue::from_str(&format!("https://zhuanlan.zhihu.com/p/{article_id}/edit"))?,
+        );
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://zhuanlan.zhihu.com"),
+        );
+        Ok(headers)
+    }
 }
 
 struct ImageInfo {
@@ -335,6 +439,27 @@ fn required_str(value: &Value, field: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("知乎响应缺少 {field}"))
 }
 
+fn extract_article_id(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .and_then(value_to_string)
+        .or_else(|| value.pointer("/publish/id").and_then(value_to_string))
+        .or_else(|| {
+            value
+                .pointer("/publish/article/id")
+                .and_then(value_to_string)
+        })
+        .or_else(|| value.pointer("/data/id").and_then(value_to_string))
+        .or_else(|| value.pointer("/article/id").and_then(value_to_string))
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .or_else(|| value.as_i64().map(|id| id.to_string()))
+}
+
 fn extract_tag_names(body: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let Some(tag_line) = body.lines().rev().find(|line| !line.trim().is_empty()) else {
@@ -365,7 +490,7 @@ fn extract_tag_names(body: &str) -> Vec<String> {
     tags
 }
 
-fn find_topic_id_candidate(value: &Value, name: &str) -> Option<String> {
+fn find_topic_candidate(value: &Value, name: &str) -> Option<topic_cache::ZhihuTopicEntry> {
     let mut candidates = Vec::new();
     collect_topic_candidates(value, &mut candidates);
     candidates
@@ -374,16 +499,36 @@ fn find_topic_id_candidate(value: &Value, name: &str) -> Option<String> {
             topic
                 .get("name")
                 .and_then(Value::as_str)
-                .map(|topic_name| topic_name == name)
+                .map(|topic_name| normalize_topic_name(topic_name) == name)
                 .unwrap_or(false)
         })
         .and_then(|topic| {
-            topic.get("id").and_then(|id| {
-                id.as_str()
-                    .map(ToString::to_string)
-                    .or_else(|| id.as_i64().map(|value| value.to_string()))
-            })
+            let id = topic.get("id").and_then(value_to_string)?;
+            let name = topic
+                .get("name")
+                .and_then(Value::as_str)
+                .map(normalize_topic_name)?;
+            Some(topic_cache::ZhihuTopicEntry { id, name })
         })
+}
+
+fn normalize_topic_name(name: &str) -> String {
+    let mut normalized = String::new();
+    let mut in_tag = false;
+    for ch in name.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => normalized.push(ch),
+            _ => {}
+        }
+    }
+    normalized
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+        .to_string()
 }
 
 fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {
@@ -435,7 +580,7 @@ async fn handle_response(response: reqwest::Response) -> Result<Value> {
             .or_else(|| value.get("toast_message"))
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        anyhow::bail!("知乎 API 错误: {message}");
+        anyhow::bail!("知乎 API 错误: {message}; 响应: {}", compact_json(&value));
     }
     if let Some(result) = value.pointer("/data/result").and_then(Value::as_str) {
         if let Ok(parsed) = serde_json::from_str(result) {
@@ -468,10 +613,27 @@ mod tests {
     fn zhihu_collects_topic_candidates() {
         let value = json!({
             "data": [
-                { "object": { "type": "topic", "id": "123", "name": "美股" } }
+                { "object": { "type": "topic", "id": "123", "name": "<em>美股</em>" } }
             ]
         });
-        let topic_id = find_topic_id_candidate(&value, "美股").unwrap();
-        assert_eq!(topic_id, "123");
+        let topic = find_topic_candidate(&value, "美股").unwrap();
+        assert_eq!(topic.id, "123");
+        assert_eq!(topic.name, "美股");
+    }
+
+    #[test]
+    fn zhihu_extracts_article_id_from_publish_response() {
+        assert_eq!(
+            extract_article_id(&json!({ "id": "2048", "type": "article" })).unwrap(),
+            "2048"
+        );
+        assert_eq!(
+            extract_article_id(&json!({ "data": { "id": 2049 } })).unwrap(),
+            "2049"
+        );
+        assert_eq!(
+            extract_article_id(&json!({ "publish": { "id": "2050" } })).unwrap(),
+            "2050"
+        );
     }
 }

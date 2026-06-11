@@ -1,4 +1,4 @@
-use crate::browser::cdp::BrowserCookie;
+use crate::{browser::cdp::BrowserCookie, topic_cache};
 use aes::Aes128;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -42,6 +42,7 @@ pub async fn publish_image_note(
     title: &str,
     desc: &str,
     image_paths: &[PathBuf],
+    topic_cache_path: Option<&Path>,
 ) -> Result<String> {
     if image_paths.is_empty() {
         anyhow::bail!("小红书 API 发布需要至少一张图片");
@@ -57,7 +58,7 @@ pub async fn publish_image_note(
     }
 
     let response = session
-        .create_image_note(&client, title, desc, &file_ids)
+        .create_image_note(&client, title, desc, &file_ids, topic_cache_path)
         .await?;
     Ok(format!(
         "小红书 API 已提交发布：{}",
@@ -145,6 +146,7 @@ impl XhsSession {
         title: &str,
         desc: &str,
         file_ids: &[String],
+        topic_cache_path: Option<&Path>,
     ) -> Result<Value> {
         let images = file_ids
             .iter()
@@ -160,7 +162,10 @@ impl XhsSession {
         let topics = extract_topic_names(desc);
         let mut hash_tags = Vec::new();
         for topic in &topics {
-            if let Some(tag) = self.search_topic(client, topic, title, desc).await? {
+            if let Some(tag) = self
+                .find_topic(client, topic, title, desc, topic_cache_path)
+                .await?
+            {
                 hash_tags.push(tag);
             }
         }
@@ -209,6 +214,39 @@ impl XhsSession {
             .await
             .with_context(|| format!("搜索小红书话题失败: {topic}"))?;
         Ok(find_topic_candidate(&response, topic))
+    }
+
+    async fn find_topic(
+        &self,
+        client: &reqwest::Client,
+        topic: &str,
+        title: &str,
+        desc: &str,
+        topic_cache_path: Option<&Path>,
+    ) -> Result<Option<Value>> {
+        if let Some(path) = topic_cache_path {
+            match topic_cache::get_xhs(path, topic) {
+                Ok(Some(cached)) => return Ok(Some(cached)),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    topic = topic,
+                    error = %error,
+                    "failed to read xhs topic cache"
+                ),
+            }
+        }
+
+        let found = self.search_topic(client, topic, title, desc).await?;
+        if let (Some(path), Some(value)) = (topic_cache_path, found.as_ref()) {
+            if let Err(error) = topic_cache::set_xhs(path, topic, value) {
+                tracing::warn!(
+                    topic = topic,
+                    error = %error,
+                    "failed to write xhs topic cache"
+                );
+            }
+        }
+        Ok(found)
     }
 
     async fn creator_get(
@@ -398,11 +436,30 @@ fn find_topic_candidate(value: &Value, topic: &str) -> Option<Value> {
             candidate
                 .get("name")
                 .and_then(Value::as_str)
-                .map(|name| name == topic)
+                .map(|name| normalize_topic_name(name) == topic)
                 .unwrap_or(false)
         })
         .or_else(|| candidates.first())
         .cloned()
+}
+
+fn normalize_topic_name(name: &str) -> String {
+    let mut normalized = String::new();
+    let mut in_tag = false;
+    for ch in name.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => normalized.push(ch),
+            _ => {}
+        }
+    }
+    normalized
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+        .to_string()
 }
 
 fn collect_topic_candidates(value: &Value, candidates: &mut Vec<Value>) {

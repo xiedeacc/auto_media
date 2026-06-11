@@ -10,6 +10,7 @@ mod publish;
 mod scheduler;
 mod startup;
 mod state;
+mod topic_cache;
 mod tray;
 
 fn main() {

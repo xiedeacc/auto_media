@@ -36,7 +36,7 @@ multi_image_policy = "newest"
 [publish]
 title_pattern = "挑战千万美金 - {YYYYMMDD}"
 fallback_body_text = "挑战千万美金 - {YYYYMMDD}"
-tags = ["#投资理财", "#投资", "#理财", "#美股", "#交易员", "#期权", "#期权交易", "#美股期权", "#投资挑战", "#实盘记录", "#账户盈利", "#交易复盘", "#富途", "#盈透", "#老虎"]
+tags = ["#投资", "#美股", "#富途", "#盈透", "#期权", "#美股期权", "#交易员", "#投资挑战", "#实盘记录", "#账户盈利", "#交易复盘", "#老虎","#投资理财", "#期权交易", "#理财"]
 publish_platforms = ["xhs", "zhihu", "twitter"]
 
 [platforms.xhs]

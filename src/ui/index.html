@@ -16,7 +16,7 @@
         <div class="actions">
           <button id="manual-post" type="button">手动发文</button>
           <button id="run-now" type="button">立即检测</button>
-          <button id="pause-toggle" type="button">暂停</button>
+          <button id="pause-toggle" type="button">启动</button>
           <button id="logs-button" type="button">日志</button>
         </div>
       </header>
@@ -112,21 +112,30 @@
           <button class="icon-button" data-close-manual type="button">×</button>
         </header>
         <div class="manual-form">
-          <div class="form-field">
-            <span class="label">平台</span>
-            <div class="platform-picker">
-              <label>
-                <input type="checkbox" name="manual-platform" value="xhs" checked />
-                <span>小红书</span>
-              </label>
-              <label>
-                <input type="checkbox" name="manual-platform" value="zhihu" checked />
-                <span>知乎</span>
-              </label>
-              <label>
-                <input type="checkbox" name="manual-platform" value="twitter" checked />
-                <span>Twitter/X</span>
-              </label>
+          <div class="manual-choice-row">
+            <div class="form-field">
+              <span class="label">模板</span>
+              <select id="manual-template" class="select-input">
+                <option value="trade" selected>交易模板</option>
+                <option value="normal">普通模板</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <span class="label">平台</span>
+              <div class="platform-picker">
+                <label>
+                  <input type="checkbox" name="manual-platform" value="xhs" checked />
+                  <span>小红书</span>
+                </label>
+                <label>
+                  <input type="checkbox" name="manual-platform" value="zhihu" checked />
+                  <span>知乎</span>
+                </label>
+                <label>
+                  <input type="checkbox" name="manual-platform" value="twitter" checked />
+                  <span>Twitter/X</span>
+                </label>
+              </div>
             </div>
           </div>
           <label>
@@ -164,6 +173,29 @@
           <button class="icon-button" data-close-logs type="button">×</button>
         </header>
         <pre id="logs-content" class="logs-content">加载中</pre>
+      </section>
+    </div>
+    <div id="image-preview-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-preview></div>
+      <section class="modal-panel image-preview-panel">
+        <header class="modal-head">
+          <h2>图片预览</h2>
+          <button class="icon-button" data-close-preview type="button">×</button>
+        </header>
+        <div class="image-preview-body">
+          <img id="preview-image" alt="图片预览" />
+        </div>
+        <p id="preview-caption" class="image-preview-caption"></p>
+      </section>
+    </div>
+    <div id="progress-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop"></div>
+      <section class="modal-panel progress-panel">
+        <header class="modal-head">
+          <h2 id="progress-title">发送进度</h2>
+          <button id="close-progress" class="icon-button" type="button">×</button>
+        </header>
+        <div id="progress-list" class="progress-list"></div>
       </section>
     </div>
     <script src="./main.js"></script>

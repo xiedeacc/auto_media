@@ -18,6 +18,7 @@ pub struct CdpPlatformAdapter {
     platform_config: PlatformSection,
     profile_dir: PathBuf,
     auth_file: PathBuf,
+    topic_cache_file: PathBuf,
     browser: CdpBrowser,
 }
 
@@ -34,12 +35,14 @@ impl CdpPlatformAdapter {
         platform_config: PlatformSection,
         profile_dir: PathBuf,
         auth_file: PathBuf,
+        topic_cache_file: PathBuf,
     ) -> Self {
         Self {
             platform,
             platform_config,
             profile_dir,
             auth_file,
+            topic_cache_file,
             browser: CdpBrowser::default(),
         }
     }
@@ -114,6 +117,7 @@ impl PlatformAdapter for CdpPlatformAdapter {
                 &job.title,
                 &job.body_text,
                 std::slice::from_ref(&job.image_path),
+                Some(&self.topic_cache_file),
             )
             .await?;
             tracing::warn!(
@@ -135,6 +139,7 @@ impl PlatformAdapter for CdpPlatformAdapter {
                 &job.title,
                 &job.body_text,
                 std::slice::from_ref(&job.image_path),
+                Some(&self.topic_cache_file),
             )
             .await?;
             tracing::warn!(
@@ -202,9 +207,14 @@ impl PlatformAdapter for CdpPlatformAdapter {
     async fn publish_manual_article(&self, job: &ManualPublishJob) -> Result<PublishResult> {
         if self.platform == Platform::Xhs {
             let cookies = self.load_or_capture_cookies().await?;
-            let message =
-                xhs_api::publish_image_note(&cookies, &job.title, &job.body_text, &job.image_paths)
-                    .await?;
+            let message = xhs_api::publish_image_note(
+                &cookies,
+                &job.title,
+                &job.body_text,
+                &job.image_paths,
+                Some(&self.topic_cache_file),
+            )
+            .await?;
             tracing::warn!(
                 platform = %self.platform,
                 image_count = job.image_paths.len(),
@@ -225,6 +235,7 @@ impl PlatformAdapter for CdpPlatformAdapter {
                 &job.title,
                 &job.body_text,
                 &job.image_paths,
+                Some(&self.topic_cache_file),
             )
             .await?;
             tracing::warn!(

@@ -23,11 +23,11 @@ pub struct RuntimeStatus {
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
-            paused: false,
-            state: "idle".to_string(),
+            paused: true,
+            state: "stopped".to_string(),
             last_tick: None,
             next_wakeup: None,
-            last_message: "等待调度".to_string(),
+            last_message: "已停止".to_string(),
             last_report: None,
             recent_platform_statuses: Vec::new(),
         }
@@ -55,7 +55,7 @@ impl Scheduler {
     }
 
     pub async fn run_forever(self) {
-        if self.config.scheduler.run_immediately_on_start {
+        if self.config.scheduler.run_immediately_on_start && !self.status.read().await.paused {
             if let Err(error) = self.tick("startup").await {
                 tracing::error!(?error, "startup tick failed");
             }
@@ -137,11 +137,11 @@ impl Scheduler {
     pub async fn set_paused(&self, paused: bool) {
         let mut status = self.status.write().await;
         status.paused = paused;
-        status.state = if paused { "paused" } else { "idle" }.to_string();
+        status.state = if paused { "stopped" } else { "idle" }.to_string();
         status.last_message = if paused {
-            "已暂停".to_string()
+            "已停止".to_string()
         } else {
-            "已恢复".to_string()
+            "已启动".to_string()
         };
     }
 

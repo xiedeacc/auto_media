@@ -1,4 +1,5 @@
 const invoke = window.__TAURI__.core.invoke;
+const listen = window.__TAURI__.event?.listen;
 
 const els = {
   message: document.querySelector("#message"),
@@ -15,7 +16,14 @@ const els = {
   records: document.querySelector("#records"),
   manualModal: document.querySelector("#manual-modal"),
   logsModal: document.querySelector("#logs-modal"),
+  imagePreviewModal: document.querySelector("#image-preview-modal"),
+  progressModal: document.querySelector("#progress-modal"),
   logsContent: document.querySelector("#logs-content"),
+  previewImage: document.querySelector("#preview-image"),
+  previewCaption: document.querySelector("#preview-caption"),
+  progressTitle: document.querySelector("#progress-title"),
+  progressList: document.querySelector("#progress-list"),
+  closeProgress: document.querySelector("#close-progress"),
   selectImages: document.querySelector("#select-images"),
   imageCount: document.querySelector("#image-count"),
   imageList: document.querySelector("#image-list"),
@@ -23,6 +31,7 @@ const els = {
   manualText: document.querySelector("#manual-text"),
   manualTags: document.querySelector("#manual-tags"),
   submitManual: document.querySelector("#submit-manual"),
+  manualTemplate: document.querySelector("#manual-template"),
   manualPlatforms: document.querySelectorAll('input[name="manual-platform"]'),
   platformStatuses: document.querySelectorAll("[data-platform-status]"),
   loginButtons: document.querySelectorAll("[data-login]"),
@@ -33,7 +42,10 @@ let busy = false;
 let manualImages = [];
 let lastMessage = "";
 let defaultTags = [];
-let manualTagsInitialized = false;
+let publishTitlePattern = "";
+let lastTradeTitle = "";
+let lastTradeTags = "";
+let manualProgressItems = [];
 
 function fmt(value) {
   if (!value) return "-";
@@ -53,16 +65,16 @@ async function refresh() {
     paused = status.paused;
     lastMessage = status.last_message || "";
     els.message.textContent = "";
-    els.state.textContent = paused ? "paused" : status.state;
+    els.state.textContent = paused ? "stopped" : status.state;
     els.lastTick.textContent = status.last_tick ? "最近状态已更新" : "-";
     els.recentCheck.textContent = fmt(status.last_tick);
     els.nextWakeup.textContent = fmt(status.next_wakeup);
-    els.pauseToggle.textContent = paused ? "恢复" : "暂停";
+    els.pauseToggle.textContent = paused ? "启动" : "停止";
     els.autostart.checked = Boolean(data.autostart_enabled);
     defaultTags = data.publish_tags || [];
-    if (!manualTagsInitialized && els.manualTags && !els.manualTags.value.trim()) {
-      els.manualTags.value = defaultTags.join(" ");
-      manualTagsInitialized = true;
+    publishTitlePattern = data.publish_title_pattern || "";
+    if (!els.manualModal.classList.contains("hidden")) {
+      applyManualTemplate();
     }
     renderPlatformSessions(data.platform_sessions || []);
     renderRecords(status.recent_platform_statuses || []);
@@ -86,10 +98,7 @@ function showError(error) {
 }
 
 function openManualModal() {
-  if (els.manualTags && !els.manualTags.value.trim()) {
-    els.manualTags.value = defaultTags.join(" ");
-    manualTagsInitialized = true;
-  }
+  applyManualTemplate();
   els.manualModal.classList.remove("hidden");
   els.manualTitle.focus();
 }
@@ -114,10 +123,133 @@ function closeLogsModal() {
   els.logsModal.classList.add("hidden");
 }
 
+function closeImagePreview() {
+  els.imagePreviewModal.classList.add("hidden");
+  els.previewImage.removeAttribute("src");
+  els.previewCaption.textContent = "";
+}
+
+function platformLabel(platform) {
+  if (platform === "xhs") return "小红书";
+  if (platform === "zhihu") return "知乎";
+  if (platform === "twitter") return "Twitter/X";
+  return platform || "-";
+}
+
+function progressStatusText(status) {
+  if (status === "pending") return "等待";
+  if (status === "publishing") return "发送中";
+  if (status === "success") return "成功";
+  if (status === "failed") return "失败";
+  if (status === "done") return "完成";
+  return status || "-";
+}
+
+function openProgressModal(platforms) {
+  manualProgressItems = platforms.map((platform) => ({
+    platform,
+    status: "pending",
+    message: "等待发送",
+  }));
+  els.progressTitle.textContent = "发送进度";
+  els.closeProgress.disabled = false;
+  renderProgress();
+  els.progressModal.classList.remove("hidden");
+}
+
+function closeProgressModal() {
+  els.progressModal.classList.add("hidden");
+}
+
+function renderProgress() {
+  els.progressList.innerHTML = manualProgressItems
+    .map(
+      (item) => `<div class="progress-row">
+        <span>${escapeHtml(platformLabel(item.platform))}</span>
+        <strong class="progress-status ${escapeHtml(item.status)}">${escapeHtml(progressStatusText(item.status))}</strong>
+        <small>${escapeHtml(item.message)}</small>
+      </div>`,
+    )
+    .join("");
+}
+
+function updateManualProgress(payload) {
+  if (!payload) return;
+
+  if (!payload.platform) {
+    if (payload.status === "start") {
+      els.progressTitle.textContent = payload.message || "发送进度";
+    } else if (payload.status === "done") {
+      els.progressTitle.textContent = "发送完成";
+    }
+    return;
+  }
+
+  const index = manualProgressItems.findIndex(
+    (item) => item.platform === payload.platform,
+  );
+  const item = {
+    platform: payload.platform,
+    status: payload.status || "publishing",
+    message: payload.message || "",
+  };
+  if (index >= 0) {
+    manualProgressItems[index] = item;
+  } else {
+    manualProgressItems.push(item);
+  }
+  renderProgress();
+}
+
 function selectedManualPlatforms() {
   return Array.from(els.manualPlatforms)
     .filter((input) => input.checked)
     .map((input) => input.value);
+}
+
+function selectedManualTemplate() {
+  return els.manualTemplate?.value || "trade";
+}
+
+function yesterdayParts() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return { year, month, day };
+}
+
+function renderTitlePattern(pattern) {
+  const { year, month, day } = yesterdayParts();
+  return (pattern || "")
+    .replaceAll("{YYYYMMDD}", `${year}${month}${day}`)
+    .replaceAll("{YYYY-MM-DD}", `${year}-${month}-${day}`);
+}
+
+function applyManualTemplate() {
+  const template = selectedManualTemplate();
+  const tradeTitle = renderTitlePattern(publishTitlePattern);
+  const tradeTags = defaultTags.join(" ");
+
+  if (template === "trade") {
+    if (!els.manualTitle.value.trim() || els.manualTitle.value === lastTradeTitle) {
+      els.manualTitle.value = tradeTitle;
+    }
+    if (!els.manualTags.value.trim() || els.manualTags.value === lastTradeTags) {
+      els.manualTags.value = tradeTags;
+    }
+    lastTradeTitle = tradeTitle;
+    lastTradeTags = tradeTags;
+    return;
+  }
+
+  if (els.manualTitle.value === lastTradeTitle) {
+    els.manualTitle.value = "";
+  }
+  if (els.manualTags.value === lastTradeTags) {
+    els.manualTags.value = "";
+  }
 }
 
 function renderManualImages() {
@@ -126,7 +258,7 @@ function renderManualImages() {
     : "未选择图片，可按 Ctrl+V 粘贴";
   els.imageList.innerHTML = manualImages
     .map(
-      (path, index) => `<div class="image-row">
+      (path, index) => `<div class="image-row" role="button" tabindex="0" data-preview-image="${index}">
         <span>${escapeHtml(path)}</span>
         <button type="button" data-remove-image="${index}">移除</button>
       </div>`,
@@ -134,11 +266,39 @@ function renderManualImages() {
     .join("");
 
   els.imageList.querySelectorAll("[data-remove-image]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
       manualImages.splice(Number(button.dataset.removeImage), 1);
       renderManualImages();
     });
   });
+
+  els.imageList.querySelectorAll("[data-preview-image]").forEach((row) => {
+    row.addEventListener("click", () => {
+      previewManualImage(Number(row.dataset.previewImage));
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        previewManualImage(Number(row.dataset.previewImage));
+      }
+    });
+  });
+}
+
+async function previewManualImage(index) {
+  const path = manualImages[index];
+  if (!path) return;
+  els.imagePreviewModal.classList.remove("hidden");
+  els.previewCaption.textContent = path;
+  els.previewImage.removeAttribute("src");
+  try {
+    els.previewImage.src = await call("read_image_preview", { path });
+  } catch (error) {
+    closeImagePreview();
+    showError(error);
+    window.alert(error?.message || String(error));
+  }
 }
 
 async function saveClipboardImage(file, index) {
@@ -258,6 +418,7 @@ els.runNow.addEventListener("click", async () => {
 
 els.manualPost.addEventListener("click", openManualModal);
 els.logsButton.addEventListener("click", openLogsModal);
+els.closeProgress.addEventListener("click", closeProgressModal);
 
 els.clearRecords.addEventListener("click", async () => {
   if (busy) return;
@@ -284,7 +445,13 @@ document.querySelectorAll("[data-close-logs]").forEach((node) => {
   node.addEventListener("click", closeLogsModal);
 });
 
+document.querySelectorAll("[data-close-preview]").forEach((node) => {
+  node.addEventListener("click", closeImagePreview);
+});
+
 window.addEventListener("paste", handlePaste);
+
+els.manualTemplate.addEventListener("change", applyManualTemplate);
 
 els.selectImages.addEventListener("click", async () => {
   try {
@@ -309,7 +476,8 @@ els.submitManual.addEventListener("click", async () => {
     window.alert(lastMessage);
     return;
   }
-  if (platforms.includes("zhihu") && els.manualText.value.trim().length < 9) {
+  const effectiveText = `${els.manualText.value}\n${els.manualTags.value}`.trim();
+  if (platforms.includes("zhihu") && effectiveText.length < 9) {
     lastMessage = "知乎正文至少需要 9 个字";
     window.alert(lastMessage);
     return;
@@ -317,6 +485,7 @@ els.submitManual.addEventListener("click", async () => {
 
   busy = true;
   els.submitManual.disabled = true;
+  openProgressModal(platforms);
   try {
     const message = await call("manual_publish", {
       title: els.manualTitle.value,
@@ -326,9 +495,19 @@ els.submitManual.addEventListener("click", async () => {
       platforms,
     });
     lastMessage = message;
+    els.progressTitle.textContent = "发送完成";
     closeManualModal();
     await refresh();
   } catch (error) {
+    els.progressTitle.textContent = "发送失败";
+    if (!manualProgressItems.some((item) => item.status === "failed")) {
+      manualProgressItems.push({
+        platform: "manual",
+        status: "failed",
+        message: error?.message || String(error),
+      });
+      renderProgress();
+    }
     showError(error);
   } finally {
     busy = false;
@@ -378,3 +557,9 @@ document.querySelectorAll("[data-open]").forEach((button) => {
 
 refresh();
 setInterval(refresh, 5000);
+
+if (listen) {
+  listen("manual_publish_progress", (event) => {
+    updateManualProgress(event.payload);
+  });
+}

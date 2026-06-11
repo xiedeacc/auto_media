@@ -42,6 +42,13 @@ pub struct PlatformSessionSummary {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ManualPublishProgress {
+    pub platform: Option<String>,
+    pub status: String,
+    pub message: String,
+}
+
 impl AppController {
     pub fn new(paths: RuntimePaths, config: AppConfig) -> Result<Self> {
         let state = Arc::new(StateStore::open(&paths.state_file)?);
@@ -112,37 +119,63 @@ impl AppController {
         Ok(())
     }
 
-    pub async fn manual_publish(
+    pub async fn manual_publish_with_progress<F>(
         &self,
         title: String,
         text: String,
         tags: Option<String>,
         image_paths: Vec<String>,
         platforms: Option<Vec<String>>,
-    ) -> Result<String> {
+        mut progress: F,
+    ) -> Result<String>
+    where
+        F: FnMut(ManualPublishProgress),
+    {
         let image_paths = image_paths.into_iter().map(Into::into).collect::<Vec<_>>();
-        let tags = tags
-            .as_deref()
-            .map(parse_tags)
-            .filter(|tags| !tags.is_empty())
-            .unwrap_or_else(|| self.config.publish.tags.clone());
+        let tags = match tags {
+            Some(text) => parse_tags(&text),
+            None => self.config.publish.tags.clone(),
+        };
         let job = ManualPublishJob::new(title, text, image_paths, &tags)?;
         let mut messages = Vec::new();
         let platform_names = platforms
             .filter(|platforms| !platforms.is_empty())
             .unwrap_or_else(|| self.config.publish.publish_platforms.clone());
 
+        progress(ManualPublishProgress {
+            platform: None,
+            status: "start".to_string(),
+            message: format!("准备发送到 {} 个平台", platform_names.len()),
+        });
+
         for platform_name in &platform_names {
             let platform: Platform = platform_name.parse()?;
             let Some(adapter) = self.adapters.get(&platform) else {
-                messages.push(format!("{platform}: 平台适配器未启用"));
+                let message = "平台适配器未启用".to_string();
+                progress(ManualPublishProgress {
+                    platform: Some(platform.to_string()),
+                    status: "failed".to_string(),
+                    message: message.clone(),
+                });
+                messages.push(format!("{platform}: {message}"));
                 continue;
             };
 
-            match adapter.validate_session().await? {
-                SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
-                status => {
-                    let message = status.label().to_string();
+            progress(ManualPublishProgress {
+                platform: Some(platform.to_string()),
+                status: "publishing".to_string(),
+                message: format!("正在发送到 {platform}"),
+            });
+
+            let session_status = match adapter.validate_session().await {
+                Ok(status) => status,
+                Err(error) => {
+                    let message = format!("登录态检测失败：{error:#}");
+                    tracing::warn!(
+                        platform = %platform,
+                        error = %error,
+                        "manual publish session validation failed"
+                    );
                     self.state.mark_platform(
                         &job.job_id,
                         platform,
@@ -150,6 +183,37 @@ impl AppController {
                         None,
                         Some(&message),
                     )?;
+                    progress(ManualPublishProgress {
+                        platform: Some(platform.to_string()),
+                        status: "failed".to_string(),
+                        message: message.clone(),
+                    });
+                    messages.push(format!("{platform}: {message}"));
+                    continue;
+                }
+            };
+
+            match session_status {
+                SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
+                status => {
+                    let message = status.label().to_string();
+                    tracing::warn!(
+                        platform = %platform,
+                        session_status = ?status,
+                        "manual publish session invalid"
+                    );
+                    self.state.mark_platform(
+                        &job.job_id,
+                        platform,
+                        "failed",
+                        None,
+                        Some(&message),
+                    )?;
+                    progress(ManualPublishProgress {
+                        platform: Some(platform.to_string()),
+                        status: "failed".to_string(),
+                        message: message.clone(),
+                    });
                     messages.push(format!("{platform}: {message}"));
                     continue;
                 }
@@ -164,10 +228,20 @@ impl AppController {
                         result.remote_url.as_deref(),
                         None,
                     )?;
+                    progress(ManualPublishProgress {
+                        platform: Some(platform.to_string()),
+                        status: "success".to_string(),
+                        message: result.message.clone(),
+                    });
                     messages.push(format!("{platform}: {}", result.message));
                 }
                 Err(error) => {
                     let message = format!("{error:#}");
+                    tracing::warn!(
+                        platform = %platform,
+                        error = %message,
+                        "manual publish platform failed"
+                    );
                     self.state.mark_platform(
                         &job.job_id,
                         platform,
@@ -175,6 +249,11 @@ impl AppController {
                         None,
                         Some(&message),
                     )?;
+                    progress(ManualPublishProgress {
+                        platform: Some(platform.to_string()),
+                        status: "failed".to_string(),
+                        message: message.clone(),
+                    });
                     messages.push(format!("{platform}: {message}"));
                 }
             }
@@ -185,6 +264,11 @@ impl AppController {
         self.scheduler
             .set_message_with_records("manual_publish", message.clone(), records)
             .await;
+        progress(ManualPublishProgress {
+            platform: None,
+            status: "done".to_string(),
+            message: "手动发文已处理，详细内容见日志".to_string(),
+        });
         Ok(message)
     }
 
@@ -204,6 +288,10 @@ impl AppController {
 
     pub fn publish_tags(&self) -> Vec<String> {
         self.config.publish.tags.clone()
+    }
+
+    pub fn publish_title_pattern(&self) -> String {
+        self.config.publish.title_pattern.clone()
     }
 
     pub async fn close_browser_tabs(&self) {
@@ -282,6 +370,7 @@ pub fn run() -> Result<()> {
             commands::run_now,
             commands::select_images,
             commands::save_pasted_image,
+            commands::read_image_preview,
             commands::manual_publish,
             commands::get_logs,
             commands::clear_records,
@@ -337,6 +426,7 @@ fn build_adapters(
                 config.platforms.xhs.clone(),
                 paths.browser_profiles_dir.join("xhs"),
                 paths.auth_dir.join("xhs.cookies.enc"),
+                paths.conf_dir.join("topic_cache.json"),
             )),
         );
     }
@@ -349,6 +439,7 @@ fn build_adapters(
                 config.platforms.zhihu.clone(),
                 paths.browser_profiles_dir.join("zhihu"),
                 paths.auth_dir.join("zhihu.cookies.enc"),
+                paths.conf_dir.join("topic_cache.json"),
             )),
         );
     }
@@ -361,6 +452,7 @@ fn build_adapters(
                 config.platforms.twitter.clone(),
                 paths.browser_profiles_dir.join("twitter"),
                 paths.auth_dir.join("twitter.cookies.enc"),
+                paths.conf_dir.join("topic_cache.json"),
             )),
         );
     }

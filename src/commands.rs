@@ -1,6 +1,7 @@
 use crate::{app::SharedState, platforms::Platform};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Local;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub async fn get_status(
@@ -15,6 +16,7 @@ pub async fn get_status(
         "platform_sessions": platform_sessions,
         "paths": state.controller.path_summary(),
         "publish_tags": state.controller.publish_tags(),
+        "publish_title_pattern": state.controller.publish_title_pattern(),
         "autostart_enabled": autostart
     });
     Ok(payload)
@@ -67,17 +69,36 @@ pub async fn save_pasted_image(
 }
 
 #[tauri::command]
+pub async fn read_image_preview(path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path);
+    let mime = mime_guess::from_path(&path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string();
+    if !mime.starts_with("image/") {
+        return Err("只能预览图片文件".to_string());
+    }
+
+    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+#[tauri::command]
 pub async fn manual_publish(
     state: State<'_, SharedState>,
+    app: AppHandle,
     title: String,
     text: String,
     tags: Option<String>,
     image_paths: Vec<String>,
     platforms: Option<Vec<String>>,
 ) -> Result<String, String> {
+    let app_for_emit = app.clone();
     state
         .controller
-        .manual_publish(title, text, tags, image_paths, platforms)
+        .manual_publish_with_progress(title, text, tags, image_paths, platforms, move |progress| {
+            let _ = app_for_emit.emit("manual_publish_progress", progress);
+        })
         .await
         .map_err(|error| error.to_string())
 }

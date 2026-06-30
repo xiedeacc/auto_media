@@ -12,6 +12,7 @@ mod startup;
 mod state;
 mod topic_cache;
 mod tray;
+mod watermark;
 
 fn main() {
     if let Err(error) = app::run() {

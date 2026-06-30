@@ -34,6 +34,18 @@ pub struct MediaPlatformAdapter {
     cdp: Box<dyn PublishBackend>,
     api: Box<dyn PublishBackend>,
     prefer_cdp: AtomicBool,
+    /// Resolved watermark text for this platform (`None` = no watermark).
+    watermark: Option<String>,
+}
+
+/// Built-in watermark text per platform, used when config doesn't override it.
+/// Stricter platforms (anti off-site-traffic) get a bare brand; lenient ones get
+/// the full blog URL.
+fn default_watermark_text(platform: Platform) -> Option<&'static str> {
+    match platform {
+        Platform::Zhihu | Platform::Xueqiu | Platform::Twitter => Some("https://blog.xiedeacc.com"),
+        Platform::Xhs | Platform::Douyin => Some("xiedeacc"),
+    }
 }
 
 impl MediaPlatformAdapter {
@@ -53,6 +65,13 @@ impl MediaPlatformAdapter {
         let publish_url = resolve_publish_url(&platform_config);
         // `mode = "api"` means prefer the HTTP API; anything else prefers CDP.
         let prefer_cdp = !platform_config.mode.eq_ignore_ascii_case("api");
+        // Config override wins; present-but-empty disables; absent uses the
+        // built-in default for this platform.
+        let watermark = match &platform_config.watermark {
+            Some(text) if text.trim().is_empty() => None,
+            Some(text) => Some(text.clone()),
+            None => default_watermark_text(platform).map(str::to_string),
+        };
         let cdp = cdp_backend(platform, &platform_config, profile_dir, publish_url);
         let api = api_backend(platform, cookies.clone(), topic_cache_file);
         Self {
@@ -61,7 +80,36 @@ impl MediaPlatformAdapter {
             cdp,
             api,
             prefer_cdp: AtomicBool::new(prefer_cdp),
+            watermark,
         }
+    }
+
+    /// Stamp this platform's watermark onto each image, returning paths to the
+    /// watermarked copies (written to a temp dir). Falls back to the original on
+    /// any failure, and returns originals unchanged when no watermark is set.
+    fn watermark_images(&self, originals: &[PathBuf]) -> Vec<PathBuf> {
+        let Some(text) = self.watermark.as_deref() else {
+            return originals.to_vec();
+        };
+        let out_dir = std::env::temp_dir().join("auto_media_watermark");
+        originals
+            .iter()
+            .enumerate()
+            .map(|(index, src)| {
+                let prefix = format!("{}_{index}", self.platform.as_str());
+                match crate::watermark::apply(src, &out_dir, &prefix, text) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(
+                            platform = %self.platform,
+                            error = %error,
+                            "watermark failed; uploading original image"
+                        );
+                        src.clone()
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Publish via the preferred backend; on failure fall back to the other.
@@ -127,21 +175,22 @@ impl PlatformAdapter for MediaPlatformAdapter {
     }
 
     async fn publish_image_article(&self, job: &PublishJob) -> Result<PublishResult> {
-        let images = std::slice::from_ref(&job.image_path);
+        let images = self.watermark_images(std::slice::from_ref(&job.image_path));
         self.publish_content(PublishContent {
             title: &job.title,
             body: &job.body_text,
-            image_paths: images,
+            image_paths: &images,
             tags: &job.tags,
         })
         .await
     }
 
     async fn publish_manual_article(&self, job: &ManualPublishJob) -> Result<PublishResult> {
+        let images = self.watermark_images(&job.image_paths);
         self.publish_content(PublishContent {
             title: &job.title,
             body: &job.body_text,
-            image_paths: &job.image_paths,
+            image_paths: &images,
             tags: &job.tags,
         })
         .await

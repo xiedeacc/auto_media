@@ -220,6 +220,10 @@ pub struct PlatformSection {
     pub write_url: Option<String>,
     pub creator_url: Option<String>,
     pub cdp_port: u16,
+    /// Text stamped onto images before upload. Absent → use the platform's
+    /// built-in default; present-but-empty → watermarking disabled for it.
+    #[serde(default)]
+    pub watermark: Option<String>,
 }
 
 fn default_twitter_platform() -> PlatformSection {
@@ -230,6 +234,7 @@ fn default_twitter_platform() -> PlatformSection {
         creator_url: Some("https://x.com".to_string()),
         write_url: Some("https://x.com/home".to_string()),
         cdp_port: 9225,
+        watermark: Some("https://blog.xiedeacc.com".to_string()),
     }
 }
 
@@ -241,6 +246,7 @@ fn default_xueqiu_platform() -> PlatformSection {
         creator_url: Some("https://xueqiu.com".to_string()),
         write_url: Some("https://xueqiu.com".to_string()),
         cdp_port: 9226,
+        watermark: Some("https://blog.xiedeacc.com".to_string()),
     }
 }
 
@@ -254,6 +260,7 @@ fn default_douyin_platform() -> PlatformSection {
             "https://creator.douyin.com/creator-micro/content/upload?default-tab=3".to_string(),
         ),
         cdp_port: 9227,
+        watermark: Some("xiedeacc".to_string()),
     }
 }
 
@@ -321,6 +328,7 @@ impl Default for AppConfig {
                     creator_url: Some("https://creator.xiaohongshu.com".to_string()),
                     write_url: Some("https://creator.xiaohongshu.com/publish/publish".to_string()),
                     cdp_port: 9223,
+                    watermark: Some("xiedeacc".to_string()),
                 },
                 zhihu: PlatformSection {
                     enabled: true,
@@ -329,6 +337,7 @@ impl Default for AppConfig {
                     creator_url: None,
                     write_url: Some("https://zhuanlan.zhihu.com/write".to_string()),
                     cdp_port: 9224,
+                    watermark: Some("https://blog.xiedeacc.com".to_string()),
                 },
                 twitter: PlatformSection {
                     enabled: true,
@@ -337,6 +346,7 @@ impl Default for AppConfig {
                     creator_url: Some("https://x.com".to_string()),
                     write_url: Some("https://x.com/home".to_string()),
                     cdp_port: 9225,
+                    watermark: Some("https://blog.xiedeacc.com".to_string()),
                 },
                 xueqiu: default_xueqiu_platform(),
                 douyin: default_douyin_platform(),

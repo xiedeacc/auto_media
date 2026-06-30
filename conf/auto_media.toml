@@ -51,7 +51,6 @@ publish_platforms = [
     "twitter",
 ]
 manual_platforms = [
-    "xhs",
     "zhihu",
     "twitter",
     "xueqiu",

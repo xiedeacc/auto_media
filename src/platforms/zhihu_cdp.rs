@@ -33,27 +33,39 @@ impl ZhihuCdp {
     }
 
     async fn click_publish_inner(&self, page: &mut CdpPage, topics: &[String]) -> Result<String> {
-        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post).
+        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post), but it
+        // also navigates write → /p/<id>/edit, which kills THIS page's CDP session.
         if !page.click_eval(MAIN_PUBLISH_SCRIPT).await? {
             anyhow::bail!("没有找到知乎发布按钮");
         }
-        page.drain_dialog_events().await?;
+        let _ = page.drain_dialog_events().await;
+        sleep(Duration::from_millis(2500)).await;
+
+        // Re-establish the session on the (navigated) Zhihu tab, then drive the
+        // panel — topics + confirm — on the fresh connection.
+        let mut page = self
+            .browser
+            .connect_page_matching(self.port, "zhihu")
+            .await?;
+        page.set_accept_beforeunload(true);
         let _ = page
             .wait_for_truthy(PANEL_READY_SCRIPT, "知乎发布设置面板未出现")
             .await;
-        sleep(Duration::from_millis(600)).await;
+        human_pause(600).await;
 
-        let added = self.add_topics(page, topics).await;
+        let added = self.add_topics(&mut page, topics).await;
 
         // The panel's 发布/确认发布 actually posts.
         for _ in 0..20 {
-            if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await? {
-                page.drain_dialog_events().await?;
+            if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await.unwrap_or(false) {
+                let _ = page.drain_dialog_events().await;
                 sleep(Duration::from_secs(2)).await;
+                page.set_accept_beforeunload(false);
                 return Ok(format!("已设置 {added} 个话题并点击知乎发布确认按钮"));
             }
             sleep(Duration::from_millis(250)).await;
         }
+        page.set_accept_beforeunload(false);
         Ok(format!(
             "已设置 {added} 个话题并点击底部发布，未发现二次确认弹窗"
         ))

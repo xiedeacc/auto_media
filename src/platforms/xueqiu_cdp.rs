@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
-/// Cap how many topics we attach to a Xueqiu status.
-const MAX_TOPICS: usize = 5;
+/// Xueqiu statuses accept at most 3 topics.
+const MAX_TOPICS: usize = 3;
 
 /// The composer's own file input lives inside `.lite-editor` (with an empty
 /// `accept`); the page's `image/*` inputs belong to report/moderation forms, so

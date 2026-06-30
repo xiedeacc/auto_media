@@ -145,6 +145,32 @@ impl CdpBrowser {
         Ok(page)
     }
 
+    /// Connect to the current page whose URL contains `url_substring`, regardless
+    /// of its exact path — used to re-establish a session after a flow navigates
+    /// the tab (Zhihu's 发布 navigates write → /p/<id>/edit, which kills the old
+    /// page session). Matching by substring also picks the right tab in the shared
+    /// window where several platform tabs are open at once.
+    pub async fn connect_page_matching(&self, port: u16, url_substring: &str) -> Result<CdpPage> {
+        let url = format!("http://127.0.0.1:{port}/json");
+        let targets = http_client()
+            .get(url)
+            .send()
+            .await?
+            .json::<Vec<TargetInfo>>()
+            .await
+            .unwrap_or_default();
+        let ws = targets
+            .into_iter()
+            .filter(|t| t.target_type == "page" && t.web_socket_debugger_url.is_some())
+            .find(|t| t.url.contains(url_substring))
+            .and_then(|t| t.web_socket_debugger_url)
+            .ok_or_else(|| anyhow!("no page matching '{url_substring}' on port {port}"))?;
+        let mut page = CdpPage::connect(&ws).await?;
+        page.call("Page.enable", json!({})).await?;
+        page.call("Page.bringToFront", json!({})).await?;
+        Ok(page)
+    }
+
     pub async fn get_cookies(&self, launch: &BrowserLaunch) -> Result<Vec<BrowserCookie>> {
         let mut page = self.connect_page(launch).await?;
         let result = page.call("Network.getAllCookies", json!({})).await?;

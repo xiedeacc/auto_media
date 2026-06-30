@@ -7,6 +7,9 @@
 /data/*
 !/data/.gitkeep
 
+/bin/*
+!/bin/.gitkeep
+
 /conf/state.sqlite
 /conf/state.sqlite-*
 /conf/auth/

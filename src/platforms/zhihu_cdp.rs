@@ -4,7 +4,7 @@
 
 use super::backend::{self, CdpFlow, PublishBackend, PublishContent};
 use super::Platform;
-use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
+use crate::browser::cdp::{human_pause, CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -73,11 +73,11 @@ impl ZhihuCdp {
             if eval_bool(page, ADD_TOPIC_BUTTON_SCRIPT).await != Some(true) {
                 continue;
             }
-            sleep(Duration::from_millis(700)).await;
+            human_pause(700).await;
             if eval_bool(page, &set_search_script(keyword)).await != Some(true) {
                 continue;
             }
-            sleep(Duration::from_millis(1600)).await;
+            human_pause(1600).await;
             match eval_string(page, &pick_topic_script(&want)).await {
                 Some(title) if !title.is_empty() => {
                     added += 1;
@@ -87,7 +87,7 @@ impl ZhihuCdp {
                     let _ = page.evaluate(CLEAR_SEARCH_SCRIPT).await;
                 }
             }
-            sleep(Duration::from_millis(600)).await;
+            human_pause(600).await;
         }
         self.save_topic_cache(&cache);
         added

@@ -1,6 +1,6 @@
 use super::{Platform, SessionStatus};
 use crate::{
-    browser::cdp::{BrowserCookie, BrowserLaunch, CdpBrowser, CdpPage},
+    browser::cdp::{human_pause, BrowserCookie, BrowserLaunch, CdpBrowser, CdpPage},
     config::PlatformSection,
 };
 use anyhow::{Context, Result};
@@ -8,12 +8,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::PathBuf,
-    time::{Duration, SystemTime},
-};
-use tokio::time::sleep;
+use std::{fs, path::PathBuf, time::SystemTime};
 
 /// The content of a single publish action. Cheap to copy (all borrows).
 #[derive(Debug, Clone, Copy)]
@@ -144,9 +139,9 @@ pub async fn run_flow(
 ) -> Result<String> {
     let mut page = browser.connect_page(launch).await?;
     page.navigate(&launch.url).await?;
-    sleep(Duration::from_secs(2)).await;
+    human_pause(2000).await;
     flow.prepare(&mut page).await?;
-    sleep(Duration::from_millis(800)).await;
+    human_pause(800).await;
 
     let mut messages = Vec::new();
     if flow.fill_before_upload() {
@@ -161,7 +156,7 @@ pub async fn run_flow(
             Ok(message) => messages.push(message),
             Err(error) => messages.push(format!("上传控件处理失败: {error}")),
         }
-        sleep(Duration::from_secs(5)).await;
+        human_pause(5000).await;
     }
 
     if !flow.fill_before_upload() {

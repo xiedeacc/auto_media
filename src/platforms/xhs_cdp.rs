@@ -4,7 +4,7 @@
 
 use super::backend::{self, CdpFlow, PublishBackend, PublishContent};
 use super::Platform;
-use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
+use crate::browser::cdp::{human_pause, CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -146,12 +146,9 @@ impl XhsCdp {
             if !page.eval_bool(CLICK_TOPIC_BTN_SCRIPT).await.unwrap_or(false) {
                 continue;
             }
-            sleep(Duration::from_millis(900)).await;
-            for ch in keyword.chars() {
-                let _ = page.insert_text(&ch.to_string()).await;
-                sleep(Duration::from_millis(150)).await;
-            }
-            sleep(Duration::from_millis(1700)).await;
+            human_pause(900).await;
+            let _ = page.type_text(keyword).await;
+            human_pause(1700).await;
             if page
                 .click_eval(&pick_topic_script(keyword))
                 .await
@@ -162,7 +159,7 @@ impl XhsCdp {
             } else {
                 let _ = page.insert_text(" ").await;
             }
-            sleep(Duration::from_millis(600)).await;
+            human_pause(600).await;
         }
         self.save_topic_cache(&cache);
         added

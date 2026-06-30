@@ -4,7 +4,7 @@
 
 use super::backend::{self, label_center_script, CdpFlow, PublishBackend, PublishContent};
 use super::Platform;
-use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
+use crate::browser::cdp::{human_pause, CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -113,12 +113,9 @@ impl DouyinCdp {
             if !page.eval_bool(CLICK_ADD_TOPIC_SCRIPT).await.unwrap_or(false) {
                 continue;
             }
-            sleep(Duration::from_millis(700)).await;
-            for ch in keyword.chars() {
-                let _ = page.insert_text(&ch.to_string()).await;
-                sleep(Duration::from_millis(120)).await;
-            }
-            sleep(Duration::from_millis(1600)).await;
+            human_pause(700).await;
+            let _ = page.type_text(keyword).await;
+            human_pause(1600).await;
             if page
                 .click_eval(&pick_topic_script(keyword))
                 .await
@@ -129,7 +126,7 @@ impl DouyinCdp {
             } else {
                 let _ = page.insert_text(" ").await;
             }
-            sleep(Duration::from_millis(500)).await;
+            human_pause(500).await;
         }
         self.save_topic_cache(&cache);
         added

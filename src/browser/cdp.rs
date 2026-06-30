@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -11,6 +12,31 @@ use tokio::{
     time::{sleep, timeout, Duration},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+
+/// A randomized, human-like pause centered on `base_ms` — used in place of fixed
+/// sleeps so automated steps don't share one robotic cadence (anti-风控).
+pub async fn human_pause(base_ms: u64) {
+    sleep(Duration::from_millis(jitter_ms(base_ms))).await;
+}
+
+/// Scale `base_ms` by a random factor (~0.6–1.6×) plus a little absolute jitter.
+/// (RNG is dropped before any await — `thread_rng` is not `Send`.)
+fn jitter_ms(base_ms: u64) -> u64 {
+    let mut rng = rand::thread_rng();
+    let factor = rng.gen_range(0.6_f64..1.6);
+    let extra = rng.gen_range(0_u64..90);
+    (base_ms as f64 * factor) as u64 + extra
+}
+
+/// A single human-like inter-keystroke delay (occasionally a longer think pause).
+fn keystroke_delay() -> u64 {
+    let mut rng = rand::thread_rng();
+    if rng.gen_bool(0.12) {
+        rng.gen_range(280_u64..620)
+    } else {
+        rng.gen_range(70_u64..185)
+    }
+}
 
 /// Default ordered candidate selectors for locating an image file input.
 /// Per-platform flows can pass their own list to [`CdpPage::set_file_input`].
@@ -351,16 +377,34 @@ impl CdpPage {
             json!({ "type": "mouseMoved", "x": x, "y": y }),
         )
         .await?;
+        // Settle after the move, then hold the button for a human-like moment.
+        human_pause(45).await;
         self.call(
             "Input.dispatchMouseEvent",
             json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
         )
         .await?;
+        let hold = {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(45_u64..135)
+        };
+        sleep(Duration::from_millis(hold)).await;
         self.call(
             "Input.dispatchMouseEvent",
             json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
         )
         .await?;
+        Ok(())
+    }
+
+    /// Type `text` into the focused element one character at a time with
+    /// randomized, human-like inter-keystroke delays.
+    pub async fn type_text(&mut self, text: &str) -> Result<()> {
+        for ch in text.chars() {
+            let unit = ch.to_string();
+            self.insert_text(&unit).await?;
+            sleep(Duration::from_millis(keystroke_delay())).await;
+        }
         Ok(())
     }
 

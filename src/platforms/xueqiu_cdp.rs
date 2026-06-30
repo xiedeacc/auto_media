@@ -10,7 +10,7 @@ use super::backend::{
     self, fill_editable_script, label_center_script, CdpFlow, PublishBackend, PublishContent,
 };
 use super::Platform;
-use crate::browser::cdp::{CdpBrowser, CdpPage};
+use crate::browser::cdp::{human_pause, CdpBrowser, CdpPage};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -134,12 +134,9 @@ impl XueqiuCdp {
         // refocus/selection here actually *breaks* Input.insertText.
         for keyword in keywords.iter().filter(|k| !k.is_empty()).take(MAX_TOPICS) {
             let _ = page.insert_text(" #").await;
-            sleep(Duration::from_millis(300)).await;
-            for ch in keyword.chars() {
-                let _ = page.insert_text(&ch.to_string()).await;
-                sleep(Duration::from_millis(140)).await;
-            }
-            sleep(Duration::from_millis(1500)).await;
+            human_pause(300).await;
+            let _ = page.type_text(keyword).await;
+            human_pause(1500).await;
             if page
                 .click_eval(&pick_topic_script(keyword))
                 .await
@@ -150,7 +147,7 @@ impl XueqiuCdp {
             } else {
                 let _ = page.insert_text(" ").await;
             }
-            sleep(Duration::from_millis(500)).await;
+            human_pause(500).await;
         }
         self.save_topic_cache(&cache);
         added

@@ -14,37 +14,49 @@ run_immediately_on_start = true
 [data]
 dir = "data"
 image_patterns = [
-  "*{YYYYMMDDHHMMSS}*.jpg",
-  "*{YYYYMMDDHHMMSS}*.jpeg",
-  "*{YYYYMMDDHHMMSS}*.png",
-  "*{YYYYMMDDHHMMSS}*.webp",
-  "*{YYYYMMDD}_{HH}{mm}{SS}*.jpg",
-  "*{YYYYMMDD}_{HH}{mm}{SS}*.jpeg",
-  "*{YYYYMMDD}_{HH}{mm}{SS}*.png",
-  "*{YYYYMMDD}_{HH}{mm}{SS}*.webp",
-  "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpg",
-  "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpeg",
-  "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.png",
-  "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.webp",
-  "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpg",
-  "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpeg",
-  "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.png",
-  "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.webp",
+    "*{YYYYMMDDHHMMSS}*.jpg",
+    "*{YYYYMMDDHHMMSS}*.jpeg",
+    "*{YYYYMMDDHHMMSS}*.png",
+    "*{YYYYMMDDHHMMSS}*.webp",
+    "*{YYYYMMDD}_{HH}{mm}{SS}*.jpg",
+    "*{YYYYMMDD}_{HH}{mm}{SS}*.jpeg",
+    "*{YYYYMMDD}_{HH}{mm}{SS}*.png",
+    "*{YYYYMMDD}_{HH}{mm}{SS}*.webp",
+    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpg",
+    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.jpeg",
+    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.png",
+    "*{YYYY-MM-DD}_{HH}-{mm}-{SS}*.webp",
+    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpg",
+    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.jpeg",
+    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.png",
+    "*{YYYY}年{MM}月{DD}日{HH}时{mm}分{SS}秒*.webp",
 ]
 multi_image_policy = "newest"
 
 [publish]
 title_pattern = "挑战千万美金 - {YYYYMMDD}"
 fallback_body_text = "挑战千万美金 - {YYYYMMDD}"
-tags = ["#投资", "#美股", "#富途", "#盈透", "#期权", "#美股期权", "#交易员", "#投资挑战", "#实盘记录", "#账户盈利", "#交易复盘", "#老虎","#投资理财", "#期权交易", "#理财"]
-publish_platforms = ["xhs", "zhihu", "twitter"]
+tags = [
+    "#期权",
+    "#投资",
+    "#美股",
+    "#富途",
+    "#盈透",
+    "#投资理财",
+    "#目标财富自由",
+]
+publish_platforms = [
+    "xhs",
+    "zhihu",
+    "twitter",
+]
 
 [platforms.xhs]
 enabled = true
 mode = "cdp"
 login_url = "https://www.xiaohongshu.com"
-creator_url = "https://creator.xiaohongshu.com"
 write_url = "https://creator.xiaohongshu.com/publish/publish"
+creator_url = "https://creator.xiaohongshu.com"
 cdp_port = 9223
 
 [platforms.zhihu]
@@ -58,9 +70,25 @@ cdp_port = 9224
 enabled = true
 mode = "cdp"
 login_url = "https://x.com/i/flow/login"
-creator_url = "https://x.com"
 write_url = "https://x.com/home"
+creator_url = "https://x.com"
 cdp_port = 9225
+
+[platforms.xueqiu]
+enabled = true
+mode = "cdp"
+login_url = "https://xueqiu.com"
+write_url = "https://xueqiu.com"
+creator_url = "https://xueqiu.com"
+cdp_port = 9226
+
+[platforms.douyin]
+enabled = true
+mode = "cdp"
+login_url = "https://www.douyin.com"
+write_url = "https://creator.douyin.com/creator-micro/content/upload?default-tab=3"
+creator_url = "https://creator.douyin.com"
+cdp_port = 9227
 
 [startup]
 enabled = true

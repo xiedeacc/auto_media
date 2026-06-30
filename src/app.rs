@@ -323,15 +323,32 @@ impl AppController {
         }
     }
 
-    /// Close the shared browser after a publish — unless a tab is showing a
-    /// verification the user must complete (SMS/captcha/scan), in which case keep
-    /// the window open so they can finish it. Returns whether it was closed.
+    /// Close the shared browser after a publish. If a tab is showing a
+    /// verification the user must complete (SMS/captcha/scan), wait for them to
+    /// finish it before closing — polling until the prompt clears, up to a
+    /// timeout. Only keep the window open if verification is still pending when
+    /// the timeout elapses. Returns whether it was closed.
     pub async fn finish_browser_after_publish(&self) -> bool {
+        use tokio::time::{sleep, Duration, Instant};
         let port = crate::config::SHARED_CDP_PORT;
+
         if CdpBrowser.has_pending_intervention(port).await {
-            tracing::warn!(port, "verification prompt detected; keeping browser open");
+            tracing::warn!(port, "verification prompt detected; waiting for user to complete it");
+            // Give the user up to 5 minutes to enter the SMS code / solve the
+            // captcha. Re-check periodically; close as soon as it clears.
+            let deadline = Instant::now() + Duration::from_secs(300);
+            while Instant::now() < deadline {
+                sleep(Duration::from_secs(3)).await;
+                if !CdpBrowser.has_pending_intervention(port).await {
+                    tracing::info!(port, "verification completed; closing browser");
+                    self.close_browser_tabs().await;
+                    return true;
+                }
+            }
+            tracing::warn!(port, "verification still pending after timeout; keeping browser open");
             return false;
         }
+
         self.close_browser_tabs().await;
         true
     }

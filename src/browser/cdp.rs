@@ -364,6 +364,23 @@ impl CdpPage {
         Ok(())
     }
 
+    /// Type `text` into the currently focused element as if typed (fires the
+    /// editor's input/composition handlers — needed for mention/topic search boxes).
+    pub async fn insert_text(&mut self, text: &str) -> Result<()> {
+        self.call("Input.insertText", json!({ "text": text })).await?;
+        Ok(())
+    }
+
+    /// Evaluate `expression` and read its boolean `/result/value` (false on miss).
+    pub async fn eval_bool(&mut self, expression: &str) -> Result<bool> {
+        Ok(self
+            .evaluate(expression)
+            .await?
+            .pointer("/result/value")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    }
+
     /// Dispatch a Ctrl+Enter key chord — the universal "send" shortcut for most
     /// composers (Twitter/X, many editors). The composer must already be focused.
     pub async fn press_ctrl_enter(&mut self) -> Result<()> {

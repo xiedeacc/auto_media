@@ -8,8 +8,12 @@ use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+
+/// Cap how many topics we attach to a Douyin note.
+const MAX_TOPICS: usize = 5;
 
 pub struct DouyinCdp {
     browser: CdpBrowser,
@@ -63,14 +67,19 @@ impl CdpFlow for DouyinCdp {
     }
 
     async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
-        let result = page
-            .evaluate(&fill_script(content.title, content.body))
-            .await?;
-        Ok(result
+        // Keep literal hashtags out of the description; add them as real topics.
+        let body = content.body_without_tags();
+        let result = page.evaluate(&fill_script(content.title, &body)).await?;
+        let mut message = result
             .pointer("/result/value/message")
             .and_then(Value::as_str)
             .unwrap_or("抖音图文标题/正文已填充")
-            .to_string())
+            .to_string();
+        let added = self.add_topics(page, &content.topic_keywords()).await;
+        if added > 0 {
+            message.push_str(&format!("；已添加 {added} 个话题"));
+        }
+        Ok(message)
     }
 
     async fn click_publish(
@@ -87,6 +96,100 @@ impl CdpFlow for DouyinCdp {
         }
         anyhow::bail!("没有找到抖音发布按钮")
     }
+}
+
+impl DouyinCdp {
+    /// Add each tag as a real Douyin topic: click 「#添加话题」 (inserts `#` and
+    /// focuses the editor), type the keyword, then click the exact-match
+    /// suggestion in the `.mention-suggest-mount-dom` popup. No match → leave the
+    /// literal hashtag (Douyin auto-links it) by committing a space.
+    async fn add_topics(&self, page: &mut CdpPage, keywords: &[String]) -> usize {
+        if keywords.is_empty() {
+            return 0;
+        }
+        let mut cache = self.load_topic_cache();
+        let mut added = 0usize;
+        for keyword in keywords.iter().filter(|k| !k.is_empty()).take(MAX_TOPICS) {
+            if !page.eval_bool(CLICK_ADD_TOPIC_SCRIPT).await.unwrap_or(false) {
+                continue;
+            }
+            sleep(Duration::from_millis(700)).await;
+            for ch in keyword.chars() {
+                let _ = page.insert_text(&ch.to_string()).await;
+                sleep(Duration::from_millis(120)).await;
+            }
+            sleep(Duration::from_millis(1600)).await;
+            if page
+                .click_eval(&pick_topic_script(keyword))
+                .await
+                .unwrap_or(false)
+            {
+                added += 1;
+                cache.insert(keyword.clone(), format!("#{keyword}"));
+            } else {
+                let _ = page.insert_text(" ").await;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+        self.save_topic_cache(&cache);
+        added
+    }
+
+    fn topic_cache_path(&self) -> PathBuf {
+        self.profile_dir.join("topic_cache.json")
+    }
+
+    fn load_topic_cache(&self) -> HashMap<String, String> {
+        std::fs::read_to_string(self.topic_cache_path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_topic_cache(&self, cache: &HashMap<String, String>) {
+        if let Ok(text) = serde_json::to_string_pretty(cache) {
+            let _ = std::fs::write(self.topic_cache_path(), text);
+        }
+    }
+}
+
+/// JS-click the (smallest visible) "#添加话题" toolbar button.
+const CLICK_ADD_TOPIC_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const btn=[...document.querySelectorAll('div,button,span')].filter(vis)
+    .filter(e=>(e.innerText||'').trim()==='#添加话题')
+    .sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;})[0];
+  if(!btn) return false;
+  btn.scrollIntoView({block:'center'});
+  btn.click();
+  return true;
+})()
+"#;
+
+/// Return the center `{x,y}` of the suggestion *row* whose topic equals
+/// `#<keyword>` inside the `.mention-suggest-mount-dom` popup (exact match only).
+/// Row classes carry per-session hashes and the list-container shares the same
+/// first line, so match by an individual row's height (≈26–50px) and exact text
+/// rather than by class — clicking the container's center would hit the wrong row.
+fn pick_topic_script(keyword: &str) -> String {
+    let want = serde_json::to_string(&format!("#{keyword}")).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(() => {{
+  const want={want};
+  const vis=(el)=>{{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';}};
+  const mount=[...document.querySelectorAll('.mention-suggest-mount-dom')].filter(vis);
+  const els=mount.flatMap(m=>[...m.querySelectorAll('*')]).filter(vis)
+    .map(e=>({{e, r:e.getBoundingClientRect()}}))
+    .filter(o=>o.r.height>=26 && o.r.height<=50 && ((o.e.innerText||'').trim().split('\n')[0])===want);
+  if(!els.length) return null;
+  els.sort((a,b)=>a.r.width*a.r.height - b.r.width*b.r.height);
+  const r=els[0].r;
+  return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+}})()
+"#
+    )
 }
 
 const SELECT_IMAGE_TAB_SCRIPT: &str = r#"

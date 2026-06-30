@@ -33,43 +33,29 @@ impl ZhihuCdp {
     }
 
     async fn click_publish_inner(&self, page: &mut CdpPage, topics: &[String]) -> Result<String> {
-        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post), but it
-        // also navigates write → /p/<id>/edit, which kills THIS page's CDP session.
+        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post). It
+        // navigates write → /p/<id>/edit but the same CDP session survives it.
         if !page.click_eval(MAIN_PUBLISH_SCRIPT).await? {
             anyhow::bail!("没有找到知乎发布按钮");
         }
-        // The write -> /p/<id>/edit navigation prompts a `beforeunload`; accept it
-        // (and let the page settle) before reconnecting to the navigated tab.
-        let _ = page.pump_dialogs(3000).await;
-
-        // Re-establish the session on the (navigated) Zhihu tab, then drive the
-        // panel — topics + confirm — on the fresh connection.
-        let mut page = self
-            .browser
-            .connect_page_matching(self.port, "zhihu")
-            .await?;
-        page.set_accept_beforeunload(true);
+        let _ = page.pump_dialogs(1500).await;
         let _ = page
             .wait_for_truthy(PANEL_READY_SCRIPT, "知乎发布设置面板未出现")
             .await;
         human_pause(600).await;
 
-        let added = self.add_topics(&mut page, topics).await;
+        // Select topics in the panel BEFORE the final publish.
+        let added = self.add_topics(page, topics).await;
 
-        // The panel's 发布/确认发布 actually posts (and navigates away, prompting a
-        // beforeunload). Pump dialogs for a few seconds so it's reliably accepted.
+        // The panel's 发布 saves + publishes + navigates cleanly to the article.
         for _ in 0..20 {
             if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await.unwrap_or(false) {
                 let _ = page.pump_dialogs(4000).await;
-                page.set_accept_beforeunload(false);
-                return Ok(format!("已设置 {added} 个话题并点击知乎发布确认按钮"));
+                return Ok(format!("已设置 {added} 个话题并点击知乎发布按钮"));
             }
             sleep(Duration::from_millis(250)).await;
         }
-        page.set_accept_beforeunload(false);
-        Ok(format!(
-            "已设置 {added} 个话题并点击底部发布，未发现二次确认弹窗"
-        ))
+        Ok(format!("已设置 {added} 个话题并点击底部发布，未发现二次确认弹窗"))
     }
 
     /// Add each tag as a real Zhihu topic via the 发布设置 panel: open the topic

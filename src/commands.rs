@@ -17,6 +17,7 @@ pub async fn get_status(
         "paths": state.controller.path_summary(),
         "publish_tags": state.controller.publish_tags(),
         "publish_title_pattern": state.controller.publish_title_pattern(),
+        "manual_platforms": state.controller.manual_platforms(),
         "watermarks": state.controller.watermark_settings(),
         "autostart_enabled": autostart,
         "build_commit": env!("GIT_HASH"),
@@ -231,6 +232,17 @@ pub async fn set_platform_mode(
     state
         .controller
         .set_platform_mode(platform, prefer_cdp)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_manual_platforms(
+    state: State<'_, SharedState>,
+    platforms: Vec<String>,
+) -> Result<(), String> {
+    state
+        .controller
+        .set_manual_platforms(platforms)
         .map_err(|error| error.to_string())
 }
 

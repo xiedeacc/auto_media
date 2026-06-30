@@ -153,6 +153,17 @@ pub struct PublishSection {
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
     pub publish_platforms: Vec<String>,
+    /// Platforms pre-checked in the 手动发文 dialog. Absent → defaults below.
+    #[serde(default = "default_manual_platforms")]
+    pub manual_platforms: Vec<String>,
+}
+
+fn default_manual_platforms() -> Vec<String> {
+    // Xiaohongshu off by default (stricter review); the rest on.
+    ["zhihu", "twitter", "xueqiu", "douyin"]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn default_tags() -> Vec<String> {
@@ -325,6 +336,7 @@ impl Default for AppConfig {
                     "xueqiu".to_string(),
                     "douyin".to_string(),
                 ],
+                manual_platforms: default_manual_platforms(),
             },
             platforms: PlatformSections {
                 xhs: PlatformSection {
@@ -387,6 +399,16 @@ pub fn load_or_create(paths: &RuntimePaths) -> Result<AppConfig> {
 pub fn update_platform_mode(paths: &RuntimePaths, platform: Platform, mode: &str) -> Result<()> {
     let mut config = load_or_create(paths)?;
     config.platforms.section_for_mut(platform).mode = mode.to_string();
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
+}
+
+/// Persist the 手动发文 default platform selection, preserving all other
+/// current on-disk settings.
+pub fn update_manual_platforms(paths: &RuntimePaths, platforms: &[String]) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    config.publish.manual_platforms = platforms.to_vec();
     let text = toml::to_string_pretty(&config).context("serialize config")?;
     fs::write(&paths.config_file, text)
         .with_context(|| format!("write {}", paths.config_file.display()))

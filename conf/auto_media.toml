@@ -50,6 +50,12 @@ publish_platforms = [
     "zhihu",
     "twitter",
 ]
+manual_platforms = [
+    "zhihu",
+    "twitter",
+    "xueqiu",
+    "douyin",
+]
 
 [platforms.xhs]
 enabled = true

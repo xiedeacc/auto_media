@@ -9,7 +9,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use tauri::WindowEvent;
 use tokio::sync::RwLock;
 
@@ -24,6 +27,9 @@ pub struct AppController {
     state: Arc<StateStore>,
     scheduler: Scheduler,
     adapters: HashMap<Platform, Arc<dyn PlatformAdapter>>,
+    /// Default platform selection for the 手动发文 dialog. Runtime-adjustable so
+    /// UI edits take effect without a restart; also persisted to the config file.
+    manual_platforms: Mutex<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +69,7 @@ impl AppController {
         ));
         let status = Arc::new(RwLock::new(RuntimeStatus::default()));
         let scheduler = Scheduler::new(config.clone(), publisher, status);
+        let manual_platforms = Mutex::new(config.publish.manual_platforms.clone());
 
         Ok(Self {
             paths,
@@ -70,6 +77,7 @@ impl AppController {
             state,
             scheduler,
             adapters,
+            manual_platforms,
         })
     }
 
@@ -363,6 +371,18 @@ impl AppController {
         self.config.publish.title_pattern.clone()
     }
 
+    /// The 手动发文 dialog's default platform selection.
+    pub fn manual_platforms(&self) -> Vec<String> {
+        self.manual_platforms.lock().unwrap().clone()
+    }
+
+    /// Update the 手动发文 default selection at runtime and persist it.
+    pub fn set_manual_platforms(&self, platforms: Vec<String>) -> Result<()> {
+        crate::config::update_manual_platforms(&self.paths, &platforms)?;
+        *self.manual_platforms.lock().unwrap() = platforms;
+        Ok(())
+    }
+
     pub async fn close_browser_tabs(&self) {
         let port = crate::config::SHARED_CDP_PORT;
         match CdpBrowser.close_browser(port).await {
@@ -443,6 +463,7 @@ pub fn run() -> Result<()> {
             commands::set_paused,
             commands::login_platform,
             commands::set_platform_mode,
+            commands::set_manual_platforms,
             commands::set_platform_watermark,
             commands::set_autostart,
             commands::open_dir,

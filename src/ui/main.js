@@ -47,6 +47,7 @@ let lastTradeTitle = "";
 let lastTradeTags = "";
 let manualProgressItems = [];
 let watermarks = [];
+let manualPlatformDefaults = [];
 
 function fmt(value) {
   if (!value) return "-";
@@ -71,6 +72,7 @@ async function refresh() {
     }
     els.autostart.checked = Boolean(data.autostart_enabled);
     watermarks = data.watermarks || [];
+    manualPlatformDefaults = data.manual_platforms || [];
     defaultTags = data.publish_tags || [];
     publishTitlePattern = data.publish_title_pattern || "";
     if (!els.manualModal.classList.contains("hidden")) {
@@ -97,7 +99,14 @@ function showError(error) {
     els.message.textContent = "";
 }
 
+function applyManualPlatformDefaults() {
+  els.manualPlatforms.forEach((checkbox) => {
+    checkbox.checked = manualPlatformDefaults.includes(checkbox.value);
+  });
+}
+
 function openManualModal() {
+  applyManualPlatformDefaults();
   applyManualTemplate();
   els.manualModal.classList.remove("hidden");
   els.manualTitle.focus();
@@ -567,6 +576,18 @@ document.querySelectorAll("[data-close-preview]").forEach((node) => {
 window.addEventListener("paste", handlePaste);
 
 els.manualTemplate.addEventListener("change", applyManualTemplate);
+
+// Persist the manual-publish platform selection as the new default.
+els.manualPlatforms.forEach((checkbox) => {
+  checkbox.addEventListener("change", async () => {
+    manualPlatformDefaults = selectedManualPlatforms();
+    try {
+      await call("set_manual_platforms", { platforms: manualPlatformDefaults });
+    } catch (error) {
+      showError(error);
+    }
+  });
+});
 
 els.selectImages.addEventListener("click", async () => {
   try {

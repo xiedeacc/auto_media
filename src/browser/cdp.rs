@@ -456,6 +456,40 @@ impl CdpPage {
         Ok(())
     }
 
+    /// Type `text` via per-character "char" key events — the post-IME input path
+    /// that DraftJS-style editors (X/Twitter) actually commit to state, and which
+    /// handles CJK (unlike `insertText`/execCommand, which only touch the DOM).
+    /// Newlines become Enter key presses (composer line breaks). Use after a
+    /// trusted click that focuses the editor; delays are randomized (human-like).
+    pub async fn type_chars(&mut self, text: &str) -> Result<()> {
+        for ch in text.chars() {
+            if ch == '\n' {
+                for kind in ["keyDown", "keyUp"] {
+                    self.call(
+                        "Input.dispatchKeyEvent",
+                        json!({
+                            "type": kind,
+                            "key": "Enter",
+                            "code": "Enter",
+                            "windowsVirtualKeyCode": 13,
+                            "nativeVirtualKeyCode": 13,
+                        }),
+                    )
+                    .await?;
+                }
+            } else {
+                let s = ch.to_string();
+                self.call(
+                    "Input.dispatchKeyEvent",
+                    json!({ "type": "char", "text": s, "key": s, "unmodifiedText": s }),
+                )
+                .await?;
+            }
+            sleep(Duration::from_millis(keystroke_delay())).await;
+        }
+        Ok(())
+    }
+
     /// Type `text` into the focused element one character at a time with
     /// randomized, human-like inter-keystroke delays.
     pub async fn type_text(&mut self, text: &str) -> Result<()> {

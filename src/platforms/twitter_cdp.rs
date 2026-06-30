@@ -84,13 +84,21 @@ impl CdpFlow for TwitterCdp {
     async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
         // Tweets have no topic control — keep hashtags inline (content.body already
         // carries the trailing "#tag" line).
+        // No separate title field — title + body + #tags go in as one text with
+        // line breaks between the parts.
         let text = [content.title.trim(), content.body.trim()]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        // In the compose modal, execCommand insertText commits to DraftJS state.
-        page.evaluate(&fill_script(&text)).await?;
+        // X's DraftJS only commits real char input, so focus the modal editor with
+        // a trusted click and type via char key events (execCommand/insertText show
+        // text in the DOM but don't make it into the posted tweet).
+        if let Ok(Some((x, y))) = page.eval_point(MODAL_COMPOSER_POINT_SCRIPT).await {
+            page.click_point(x, y).await?;
+            human_pause(300).await;
+        }
+        page.type_chars(&text).await?;
         human_pause(400).await;
         Ok("Twitter/X 草稿已填充正文".to_string())
     }
@@ -173,6 +181,20 @@ const SIDENAV_POINT_SCRIPT: &str = r#"
 })()
 "#;
 
+/// Center `{x,y}` of the modal's tweet composer (scrolled into view), for the
+/// trusted click that focuses the editor before typing.
+const MODAL_COMPOSER_POINT_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const tas=[...document.querySelectorAll('[data-testid="tweetTextarea_0"]')].filter(vis);
+  const el=tas.find(t=>t.closest('[role="dialog"]'))||tas[0];
+  if(!el) return null;
+  el.scrollIntoView({block:'center'});
+  const r=el.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+})()
+"#;
+
 /// The compose modal is open: a tweet textarea exists inside a dialog.
 const MODAL_READY_SCRIPT: &str = r#"
 (() => {
@@ -207,45 +229,3 @@ const COMPOSER_EMPTY_SCRIPT: &str = r#"
   return (el.innerText || el.textContent || '').trim().length === 0;
 })()
 "#;
-
-fn fill_script(text: &str) -> String {
-    let text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
-    format!(
-        r#"
-(() => {{
-  const text = {text};
-  const visible = (el) => {{
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-  }};
-  const setText = (el, value) => {{
-    el.focus();
-    if (el.isContentEditable) {{
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.deleteContents();
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.execCommand('insertText', false, value);
-    }} else if ('value' in el) {{
-      const proto = Object.getPrototypeOf(el);
-      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-      if (descriptor && descriptor.set) descriptor.set.call(el, value);
-      else el.value = value;
-    }} else {{
-      el.textContent = value;
-    }}
-    el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: value }}));
-    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-  }};
-  const tas = Array.from(document.querySelectorAll('[data-testid="tweetTextarea_0"]')).filter(visible);
-  const bodyEl = tas.find(t => t.closest('[role="dialog"]')) || tas[0]
-    || Array.from(document.querySelectorAll('[role="textbox"][contenteditable="true"]')).filter(visible)[0];
-  if (bodyEl) setText(bodyEl, text);
-  return {{ message: `Twitter/X 草稿已填充：正文${{bodyEl ? '成功' : '未找到'}}。` }};
-}})()
-"#
-    )
-}

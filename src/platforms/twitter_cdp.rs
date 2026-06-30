@@ -6,7 +6,7 @@ use super::backend::{
     self, label_center_script, selector_center_script, CdpFlow, PublishBackend, PublishContent,
 };
 use super::Platform;
-use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
+use crate::browser::cdp::{human_pause, CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -78,6 +78,13 @@ impl CdpFlow for TwitterCdp {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
+        // A trusted click focuses the DraftJS composer for real, so the execCommand
+        // insert commits to the editor's posted state — a programmatic focus alone
+        // can leave the text visible in the DOM but absent from the sent tweet.
+        if let Ok(Some((x, y))) = page.eval_point(COMPOSER_POINT_SCRIPT).await {
+            let _ = page.click_point(x, y).await;
+            human_pause(300).await;
+        }
         page.evaluate(&fill_script(&text)).await?;
         Ok("Twitter/X 草稿已填充正文".to_string())
     }
@@ -152,6 +159,19 @@ const POST_BUTTON_ENABLED_SCRIPT: &str = r#"
 (() => {
   const b = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
   return !!b && b.getAttribute('aria-disabled') !== 'true';
+})()
+"#;
+
+/// Center `{x,y}` of the visible tweet composer (scrolled into view), for a
+/// trusted click that genuinely focuses the DraftJS editor before filling.
+const COMPOSER_POINT_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const el=[...document.querySelectorAll('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]')].filter(vis)[0];
+  if(!el) return null;
+  el.scrollIntoView({block:'center'});
+  const r=el.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
 })()
 "#;
 

@@ -222,21 +222,6 @@ impl CdpBrowser {
         Ok(closed)
     }
 
-    /// Launch the shared browser once (blank tab) if it isn't already running, so
-    /// the concurrent-safe `open_visible` calls during a publish only ever *add*
-    /// tabs to one window instead of racing to launch the same profile.
-    pub async fn ensure_running(&self, profile_dir: &Path, port: u16) -> Result<()> {
-        if self.is_ready(port).await {
-            return Ok(());
-        }
-        std::fs::create_dir_all(profile_dir)
-            .with_context(|| format!("create browser profile {}", profile_dir.display()))?;
-        let executable = find_browser_executable()
-            .ok_or_else(|| anyhow!("Chrome or Edge executable was not found"))?;
-        launch_browser(&executable, profile_dir, port, "about:blank").await?;
-        self.wait_until_ready(port).await
-    }
-
     /// Gracefully close the whole browser (all tabs + the process) via the
     /// browser-level `Browser.close`, falling back to closing each tab.
     pub async fn close_browser(&self, port: u16) -> Result<()> {

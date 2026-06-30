@@ -152,10 +152,10 @@ impl AppController {
         });
 
         let mut reports: Vec<(Platform, String)> = Vec::new();
-        // One shared window: open it, then publish to each platform's tab in turn
-        // (sequential = the driven tab is foreground, so trusted clicks always
-        // land and it reads like a person doing one platform at a time).
-        self.ensure_browser().await;
+        // One shared window, published to each platform's tab in turn (sequential =
+        // the driven tab is foreground, so trusted clicks land and it reads like a
+        // person). The first platform launches the window directly with its own URL,
+        // so there's no extra blank tab.
         for platform_name in &platform_names {
             let platform: Platform = platform_name.parse()?;
             let Some(adapter) = self.adapters.get(&platform) else {
@@ -313,17 +313,6 @@ impl AppController {
 
     pub fn publish_title_pattern(&self) -> String {
         self.config.publish.title_pattern.clone()
-    }
-
-    /// Launch the single shared Chrome window once, before a publish fans out so
-    /// the per-platform tabs land in one window (and don't race to launch it).
-    pub async fn ensure_browser(&self) {
-        if let Err(error) = CdpBrowser
-            .ensure_running(&self.paths.shared_profile_dir, crate::config::SHARED_CDP_PORT)
-            .await
-        {
-            tracing::warn!(error = %error, "failed to ensure shared browser running");
-        }
     }
 
     pub async fn close_browser_tabs(&self) {

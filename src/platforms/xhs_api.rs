@@ -201,15 +201,19 @@ impl XhsSession {
         });
         let topics = extract_topic_names(desc);
         let mut hash_tags = Vec::new();
+        let mut resolved = Vec::new();
         for topic in &topics {
             if let Some(tag) = self
                 .find_topic(client, topic, title, desc, topic_cache_path)
                 .await?
             {
                 hash_tags.push(tag);
+                resolved.push(topic.clone());
             }
         }
-        let desc = render_xhs_desc(desc, &topics);
+        // Only emit `#…[话题]#` markup for topics that actually resolved to a real
+        // Xiaohongshu topic; unresolved ones are dropped, never left as plain text.
+        let desc = render_xhs_desc(desc, &topics, &resolved);
         let data = json!({
             "common": {
                 "type": "normal",
@@ -435,31 +439,36 @@ fn extract_topic_names(desc: &str) -> Vec<String> {
     topics
 }
 
-fn render_xhs_desc(desc: &str, topics: &[String]) -> String {
-    if topics.is_empty() {
-        return desc.to_string();
-    }
-    let topic_line = topics
-        .iter()
-        .map(|topic| format!("\u{feff}#{topic}[话题]#\u{feff}"))
-        .collect::<Vec<_>>()
-        .join(" ");
+/// Rewrite the desc so topics appear only as real `#…[话题]#` chips: strip the
+/// trailing plain `#tag` line (matched against every parsed `all_topics`), then
+/// re-append topic markup for `resolved` topics only. Unresolved tags are
+/// dropped entirely rather than left as literal text in the body.
+fn render_xhs_desc(desc: &str, all_topics: &[String], resolved: &[String]) -> String {
     let mut lines = desc.lines().collect::<Vec<_>>();
-    if lines
-        .last()
-        .map(|line| {
-            let tokens = line.split_whitespace().collect::<Vec<_>>();
-            !tokens.is_empty()
-                && tokens.iter().all(|token| {
-                    let normalized = token.trim_start_matches('#');
-                    topics.iter().any(|topic| topic == normalized)
-                })
-        })
-        .unwrap_or(false)
+    if !all_topics.is_empty()
+        && lines
+            .last()
+            .map(|line| {
+                let tokens = line.split_whitespace().collect::<Vec<_>>();
+                !tokens.is_empty()
+                    && tokens.iter().all(|token| {
+                        let normalized = token.trim_start_matches('#');
+                        all_topics.iter().any(|topic| topic == normalized)
+                    })
+            })
+            .unwrap_or(false)
     {
         lines.pop();
     }
     let body = lines.join("\n").trim().to_string();
+    if resolved.is_empty() {
+        return body;
+    }
+    let topic_line = resolved
+        .iter()
+        .map(|topic| format!("\u{feff}#{topic}[话题]#\u{feff}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     if body.is_empty() {
         topic_line
     } else {
@@ -887,18 +896,41 @@ mod tests {
     #[test]
     fn xhs_desc_replaces_plain_tag_line_with_topic_markup() {
         let desc = "正文第一行\n\n#投资理财 #美股 富途";
-        let rendered = render_xhs_desc(
-            desc,
-            &[
-                "投资理财".to_string(),
-                "美股".to_string(),
-                "富途".to_string(),
-            ],
-        );
+        let all = [
+            "投资理财".to_string(),
+            "美股".to_string(),
+            "富途".to_string(),
+        ];
+        let rendered = render_xhs_desc(desc, &all, &all);
 
         assert_eq!(
             rendered,
             "正文第一行\n\n\u{feff}#投资理财[话题]#\u{feff} \u{feff}#美股[话题]#\u{feff} \u{feff}#富途[话题]#\u{feff}"
         );
+    }
+
+    #[test]
+    fn xhs_desc_drops_unresolved_tags_instead_of_leaving_text() {
+        // 美股/富途 didn't resolve to a real topic — they must vanish, not linger
+        // as literal text. The whole plain `#tag` line is stripped, only the
+        // resolved 投资理财 comes back as topic markup.
+        let desc = "正文第一行\n\n#投资理财 #美股 富途";
+        let all = [
+            "投资理财".to_string(),
+            "美股".to_string(),
+            "富途".to_string(),
+        ];
+        let resolved = ["投资理财".to_string()];
+        let rendered = render_xhs_desc(desc, &all, &resolved);
+
+        assert_eq!(rendered, "正文第一行\n\n\u{feff}#投资理财[话题]#\u{feff}");
+    }
+
+    #[test]
+    fn xhs_desc_drops_tag_line_entirely_when_nothing_resolves() {
+        let desc = "正文第一行\n\n#美股 富途";
+        let all = ["美股".to_string(), "富途".to_string()];
+        let rendered = render_xhs_desc(desc, &all, &[]);
+        assert_eq!(rendered, "正文第一行");
     }
 }

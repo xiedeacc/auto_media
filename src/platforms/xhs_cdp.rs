@@ -157,7 +157,11 @@ impl XhsCdp {
                 added += 1;
                 cache.insert(keyword.clone(), format!("#{keyword}"));
             } else {
-                let _ = page.insert_text(" ").await;
+                // No exact topic match — erase the "#" the 话题 button inserted plus
+                // the keyword we typed, so no literal "#keyword" text stays in the body.
+                let _ = page
+                    .press_backspace(keyword.chars().count() + 1)
+                    .await;
             }
             human_pause(600).await;
         }

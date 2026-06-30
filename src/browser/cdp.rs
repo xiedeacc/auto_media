@@ -542,6 +542,29 @@ impl CdpPage {
         Ok(())
     }
 
+    /// Press Backspace `count` times in the focused element — used to erase text
+    /// just typed into an editor (e.g. an unresolved topic keyword) so no literal
+    /// leftover remains.
+    pub async fn press_backspace(&mut self, count: usize) -> Result<()> {
+        for _ in 0..count {
+            for kind in ["keyDown", "keyUp"] {
+                self.call(
+                    "Input.dispatchKeyEvent",
+                    json!({
+                        "type": kind,
+                        "key": "Backspace",
+                        "code": "Backspace",
+                        "windowsVirtualKeyCode": 8,
+                        "nativeVirtualKeyCode": 8,
+                    }),
+                )
+                .await?;
+            }
+            sleep(Duration::from_millis(keystroke_delay())).await;
+        }
+        Ok(())
+    }
+
     /// Attach `image_paths` to the first file input matching any selector in
     /// `selectors` (tried in order). Pass [`DEFAULT_FILE_INPUT_SELECTORS`] for the
     /// generic image-input heuristic.

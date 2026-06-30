@@ -1,16 +1,45 @@
+use super::backend::{CookieStore, PublishBackend, PublishContent};
 use crate::browser::cdp::BrowserCookie;
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT, COOKIE},
     multipart,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const BEARER: &str = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 const CREATE_TWEET_QID: &str = "7TKRKCPuAGsmYde0CudbVg";
 const CREATE_TWEET_OP: &str = "CreateTweet";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+
+/// HTTP API backend for Twitter/X via the GraphQL CreateTweet endpoint.
+pub struct TwitterApi {
+    cookies: Arc<CookieStore>,
+}
+
+impl TwitterApi {
+    pub fn new(cookies: Arc<CookieStore>) -> Self {
+        Self { cookies }
+    }
+}
+
+#[async_trait]
+impl PublishBackend for TwitterApi {
+    async fn publish(&self, content: PublishContent<'_>) -> Result<String> {
+        let cookies = self.cookies.load_or_capture().await?;
+        let message =
+            publish_tweet(&cookies, content.title, content.body, content.image_paths).await?;
+        tracing::warn!(
+            image_count = content.image_paths.len(),
+            message = %message,
+            "twitter api article submitted"
+        );
+        Ok(message)
+    }
+}
 
 pub async fn publish_tweet(
     cookies: &[BrowserCookie],

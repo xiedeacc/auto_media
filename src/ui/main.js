@@ -3,18 +3,17 @@ const listen = window.__TAURI__.event?.listen;
 
 const els = {
   message: document.querySelector("#message"),
-  state: document.querySelector("#state"),
-  lastTick: document.querySelector("#last-tick"),
-  recentCheck: document.querySelector("#recent-check"),
-  nextWakeup: document.querySelector("#next-wakeup"),
   manualPost: document.querySelector("#manual-post"),
-  runNow: document.querySelector("#run-now"),
-  pauseToggle: document.querySelector("#pause-toggle"),
   logsButton: document.querySelector("#logs-button"),
   clearRecords: document.querySelector("#clear-records"),
   autostart: document.querySelector("#autostart"),
   records: document.querySelector("#records"),
   manualModal: document.querySelector("#manual-modal"),
+  settingsButton: document.querySelector("#settings-button"),
+  settingsModal: document.querySelector("#settings-modal"),
+  watermarkList: document.querySelector("#watermark-list"),
+  statusbarText: document.querySelector("#statusbar-text"),
+  statusbarBuild: document.querySelector("#statusbar-build"),
   logsModal: document.querySelector("#logs-modal"),
   imagePreviewModal: document.querySelector("#image-preview-modal"),
   progressModal: document.querySelector("#progress-modal"),
@@ -35,6 +34,7 @@ const els = {
   manualPlatforms: document.querySelectorAll('input[name="manual-platform"]'),
   platformStatuses: document.querySelectorAll("[data-platform-status]"),
   loginButtons: document.querySelectorAll("[data-login]"),
+  modeToggles: document.querySelectorAll("[data-mode-platform]"),
 };
 
 let paused = false;
@@ -46,6 +46,8 @@ let publishTitlePattern = "";
 let lastTradeTitle = "";
 let lastTradeTags = "";
 let manualProgressItems = [];
+let watermarks = [];
+let manualPlatformDefaults = [];
 
 function fmt(value) {
   if (!value) return "-";
@@ -62,15 +64,15 @@ async function refresh() {
   try {
     const data = await call("get_status");
     const status = data.status;
-    paused = status.paused;
     lastMessage = status.last_message || "";
     els.message.textContent = "";
-    els.state.textContent = paused ? "stopped" : status.state;
-    els.lastTick.textContent = status.last_tick ? "最近状态已更新" : "-";
-    els.recentCheck.textContent = fmt(status.last_tick);
-    els.nextWakeup.textContent = fmt(status.next_wakeup);
-    els.pauseToggle.textContent = paused ? "启动" : "停止";
+    els.statusbarText.textContent = "就绪";
+    if (data.build_commit) {
+      els.statusbarBuild.textContent = `${data.build_commit} · ${data.build_time || ""}`.trim();
+    }
     els.autostart.checked = Boolean(data.autostart_enabled);
+    watermarks = data.watermarks || [];
+    manualPlatformDefaults = data.manual_platforms || [];
     defaultTags = data.publish_tags || [];
     publishTitlePattern = data.publish_title_pattern || "";
     if (!els.manualModal.classList.contains("hidden")) {
@@ -97,7 +99,14 @@ function showError(error) {
     els.message.textContent = "";
 }
 
+function applyManualPlatformDefaults() {
+  els.manualPlatforms.forEach((checkbox) => {
+    checkbox.checked = manualPlatformDefaults.includes(checkbox.value);
+  });
+}
+
 function openManualModal() {
+  applyManualPlatformDefaults();
   applyManualTemplate();
   els.manualModal.classList.remove("hidden");
   els.manualTitle.focus();
@@ -123,6 +132,47 @@ function closeLogsModal() {
   els.logsModal.classList.add("hidden");
 }
 
+function openSettingsModal() {
+  renderWatermarks();
+  els.settingsModal.classList.remove("hidden");
+}
+
+function renderWatermarks() {
+  if (!els.watermarkList) return;
+  els.watermarkList.innerHTML = watermarks
+    .map(
+      (item) => `<div class="watermark-row" data-platform="${escapeHtml(item.platform)}">
+        <label class="switch">
+          <input type="checkbox" data-wm-enabled ${item.enabled ? "checked" : ""} />
+          <span></span>
+        </label>
+        <span class="wm-name">${escapeHtml(platformLabel(item.platform))}</span>
+        <input type="text" class="wm-text" data-wm-text value="${escapeHtml(item.text || "")}" placeholder="水印文本" />
+      </div>`
+    )
+    .join("");
+}
+
+async function saveWatermarkRow(row) {
+  const platform = row.dataset.platform;
+  const enabled = row.querySelector("[data-wm-enabled]").checked;
+  const text = row.querySelector("[data-wm-text]").value.trim();
+  const entry = watermarks.find((item) => item.platform === platform);
+  if (entry) {
+    entry.enabled = enabled;
+    entry.text = text;
+  }
+  try {
+    await call("set_platform_watermark", { platform, enabled, text });
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function closeSettingsModal() {
+  els.settingsModal.classList.add("hidden");
+}
+
 function closeImagePreview() {
   els.imagePreviewModal.classList.add("hidden");
   els.previewImage.removeAttribute("src");
@@ -133,6 +183,8 @@ function platformLabel(platform) {
   if (platform === "xhs") return "小红书";
   if (platform === "zhihu") return "知乎";
   if (platform === "twitter") return "Twitter/X";
+  if (platform === "xueqiu") return "雪球";
+  if (platform === "douyin") return "抖音";
   return platform || "-";
 }
 
@@ -168,9 +220,20 @@ function renderProgress() {
         <span>${escapeHtml(platformLabel(item.platform))}</span>
         <strong class="progress-status ${escapeHtml(item.status)}">${escapeHtml(progressStatusText(item.status))}</strong>
         <small>${escapeHtml(item.message)}</small>
+        ${
+          item.status === "failed"
+            ? `<button type="button" class="retry-button" data-retry-platform="${escapeHtml(item.platform)}">重试</button>`
+            : ""
+        }
       </div>`,
     )
     .join("");
+
+  els.progressList.querySelectorAll("[data-retry-platform]").forEach((button) => {
+    button.addEventListener("click", () => {
+      retryManualPlatform(button.dataset.retryPlatform);
+    });
+  });
 }
 
 function updateManualProgress(payload) {
@@ -199,6 +262,57 @@ function updateManualProgress(payload) {
     manualProgressItems.push(item);
   }
   renderProgress();
+}
+
+async function retryManualPlatform(platform) {
+  if (busy || !platform) return;
+  if (!manualImages.length) {
+    lastMessage = "请选择至少一张图片";
+    window.alert(lastMessage);
+    return;
+  }
+
+  const index = manualProgressItems.findIndex((item) => item.platform === platform);
+  const item = {
+    platform,
+    status: "publishing",
+    message: `正在重试 ${platformLabel(platform)}`,
+  };
+  if (index >= 0) {
+    manualProgressItems[index] = item;
+  } else {
+    manualProgressItems.push(item);
+  }
+  renderProgress();
+
+  busy = true;
+  els.closeProgress.disabled = true;
+  try {
+    const message = await call("manual_publish", {
+      title: els.manualTitle.value,
+      text: els.manualText.value,
+      tags: els.manualTags.value,
+      imagePaths: manualImages,
+      platforms: [platform],
+    });
+    lastMessage = message;
+    els.progressTitle.textContent = "发送完成";
+    await refresh();
+  } catch (error) {
+    const message = error?.message || String(error);
+    const failedIndex = manualProgressItems.findIndex((item) => item.platform === platform);
+    const failedItem = { platform, status: "failed", message };
+    if (failedIndex >= 0) {
+      manualProgressItems[failedIndex] = failedItem;
+    } else {
+      manualProgressItems.push(failedItem);
+    }
+    renderProgress();
+    showError(error);
+  } finally {
+    busy = false;
+    els.closeProgress.disabled = false;
+  }
 }
 
 function selectedManualPlatforms() {
@@ -259,7 +373,7 @@ function renderManualImages() {
   els.imageList.innerHTML = manualImages
     .map(
       (path, index) => `<div class="image-row" role="button" tabindex="0" data-preview-image="${index}">
-        <span>${escapeHtml(path)}</span>
+        <span title="${escapeHtml(path)}">${escapeHtml(path)}</span>
         <button type="button" data-remove-image="${index}">移除</button>
       </div>`,
     )
@@ -286,14 +400,26 @@ function renderManualImages() {
   });
 }
 
+function firstSelectedPlatform() {
+  for (const checkbox of els.manualPlatforms) {
+    if (checkbox.checked) return checkbox.value;
+  }
+  return null;
+}
+
 async function previewManualImage(index) {
   const path = manualImages[index];
   if (!path) return;
+  const platform = firstSelectedPlatform();
+  const wm = watermarks.find((item) => item.platform === platform);
+  const watermarked = platform && wm && wm.enabled && (wm.text || "").trim();
   els.imagePreviewModal.classList.remove("hidden");
-  els.previewCaption.textContent = path;
+  els.previewCaption.textContent = watermarked
+    ? `${path}　·　${platformLabel(platform)}水印预览`
+    : path;
   els.previewImage.removeAttribute("src");
   try {
-    els.previewImage.src = await call("read_image_preview", { path });
+    els.previewImage.src = await call("read_image_preview", { path, platform });
   } catch (error) {
     closeImagePreview();
     showError(error);
@@ -355,6 +481,14 @@ function renderPlatformSessions(sessions) {
     const session = byPlatform.get(button.dataset.login);
     button.textContent = session?.label === "已登录" ? "重新登录" : "登录";
   });
+  els.modeToggles.forEach((toggle) => {
+    const session = byPlatform.get(toggle.dataset.modePlatform);
+    const mode = session?.mode === "api" ? "api" : "cdp";
+    toggle.textContent = mode.toUpperCase();
+    toggle.dataset.mode = mode;
+    toggle.className = `mode-toggle mode-${mode}`;
+    toggle.title = mode === "cdp" ? "优先浏览器(CDP)，点击切换为 API" : "优先 API，点击切换为 CDP";
+  });
 }
 
 function statusClass(label) {
@@ -401,23 +535,9 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-els.runNow.addEventListener("click", async () => {
-  if (busy) return;
-  busy = true;
-  els.runNow.disabled = true;
-  try {
-    await call("run_now");
-    await refresh();
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy = false;
-    els.runNow.disabled = false;
-  }
-});
-
 els.manualPost.addEventListener("click", openManualModal);
 els.logsButton.addEventListener("click", openLogsModal);
+els.settingsButton.addEventListener("click", openSettingsModal);
 els.closeProgress.addEventListener("click", closeProgressModal);
 
 els.clearRecords.addEventListener("click", async () => {
@@ -445,6 +565,10 @@ document.querySelectorAll("[data-close-logs]").forEach((node) => {
   node.addEventListener("click", closeLogsModal);
 });
 
+document.querySelectorAll("[data-close-settings]").forEach((node) => {
+  node.addEventListener("click", closeSettingsModal);
+});
+
 document.querySelectorAll("[data-close-preview]").forEach((node) => {
   node.addEventListener("click", closeImagePreview);
 });
@@ -452,6 +576,18 @@ document.querySelectorAll("[data-close-preview]").forEach((node) => {
 window.addEventListener("paste", handlePaste);
 
 els.manualTemplate.addEventListener("change", applyManualTemplate);
+
+// Persist the manual-publish platform selection as the new default.
+els.manualPlatforms.forEach((checkbox) => {
+  checkbox.addEventListener("change", async () => {
+    manualPlatformDefaults = selectedManualPlatforms();
+    try {
+      await call("set_manual_platforms", { platforms: manualPlatformDefaults });
+    } catch (error) {
+      showError(error);
+    }
+  });
+});
 
 els.selectImages.addEventListener("click", async () => {
   try {
@@ -515,13 +651,20 @@ els.submitManual.addEventListener("click", async () => {
   }
 });
 
-els.pauseToggle.addEventListener("click", async () => {
-  try {
-    await call("set_paused", { paused: !paused });
-    await refresh();
-  } catch (error) {
-    showError(error);
-  }
+els.modeToggles.forEach((toggle) => {
+  toggle.addEventListener("click", async () => {
+    const current = toggle.dataset.mode === "api" ? "api" : "cdp";
+    const next = current === "cdp" ? "api" : "cdp";
+    try {
+      await call("set_platform_mode", {
+        platform: toggle.dataset.modePlatform,
+        mode: next,
+      });
+      await refresh();
+    } catch (error) {
+      showError(error);
+    }
+  });
 });
 
 els.autostart.addEventListener("change", async () => {
@@ -533,6 +676,14 @@ els.autostart.addEventListener("change", async () => {
     els.autostart.checked = !els.autostart.checked;
   }
 });
+
+if (els.watermarkList) {
+  // 'change' fires on checkbox toggle and on text input blur/enter — both bubble.
+  els.watermarkList.addEventListener("change", (event) => {
+    const row = event.target.closest(".watermark-row");
+    if (row) saveWatermarkRow(row);
+  });
+}
 
 els.loginButtons.forEach((button) => {
   button.addEventListener("click", async () => {

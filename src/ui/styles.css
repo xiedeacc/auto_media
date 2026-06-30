@@ -15,6 +15,8 @@ body {
   min-width: 820px;
   height: 100vh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 button {
@@ -48,11 +50,13 @@ button:disabled:hover {
 .shell {
   width: min(1120px, calc(100vw - 48px));
   margin: 0 auto;
-  height: 100vh;
-  padding: 24px 0 24px;
+  flex: 1;
+  min-height: 0;
+  padding: 24px 0 12px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .topbar {
@@ -115,9 +119,37 @@ h2 {
   line-height: 1.2;
 }
 
+.mode-toggle {
+  min-width: 0;
+  height: auto;
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid #b9c2f5;
+  background: #eef2ff;
+  color: #3538cd;
+}
+
+.mode-toggle:hover {
+  background: #e0e7ff;
+  border-color: #6366f1;
+}
+
+.mode-toggle.mode-api {
+  border-color: #f4c79a;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.mode-toggle.mode-api:hover {
+  background: #ffedd5;
+  border-color: #ea580c;
+}
+
 .platform-status {
   display: inline-block;
-  margin-top: 8px;
   padding: 4px 8px;
   border-radius: 999px;
   font-size: 12px;
@@ -165,15 +197,15 @@ h2 {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 14px;
+  align-items: stretch;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
 }
 
 .platforms {
   display: grid;
   gap: 14px;
-  align-content: start;
+  align-content: stretch;
 }
 
 .platform {
@@ -181,6 +213,152 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.platform-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.platform-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusbar {
+  flex: 0 0 auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid #d8e0e8;
+  background: #ffffff;
+}
+
+.statusbar-icon {
+  justify-self: start;
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 17px;
+  border: none;
+  background: transparent;
+  color: #526171;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.statusbar-icon:hover {
+  background: #eef2f6;
+  border: none;
+}
+
+.statusbar-text {
+  justify-self: center;
+  color: #526171;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-build {
+  justify-self: end;
+  color: #8a96a3;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.modal-panel.settings-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100vw - 36px));
+  margin: 0;
+  transform: translate(-50%, -50%);
+}
+
+.settings-body {
+  margin-top: 16px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+}
+
+.settings-section {
+  padding: 12px 0 4px;
+  border-top: 1px solid #e6ebf1;
+  margin-top: 6px;
+}
+
+.settings-section-head {
+  margin-bottom: 8px;
+}
+
+.settings-section-head .hint {
+  display: block;
+  margin-top: 4px;
+  color: #8a98a8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.watermark-list {
+  display: grid;
+  gap: 8px;
+}
+
+.watermark-row {
+  display: grid;
+  grid-template-columns: auto 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.watermark-row .switch {
+  margin-top: 0;
+}
+
+.watermark-row .wm-name {
+  color: #33475b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.watermark-row .wm-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid #d4dde6;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1f2d3d;
+  background: #fff;
+}
+
+.watermark-row .wm-text:focus {
+  outline: none;
+  border-color: #2f855a;
+}
+
+.settings-row small {
+  display: block;
+  margin-top: 4px;
+  color: #667789;
 }
 
 .wide {
@@ -407,8 +585,6 @@ tr:last-child td {
 .image-list {
   display: grid;
   gap: 8px;
-  max-height: 160px;
-  overflow: auto;
 }
 
 .image-row {
@@ -507,7 +683,7 @@ textarea {
 
 .progress-row {
   display: grid;
-  grid-template-columns: 96px 72px minmax(0, 1fr);
+  grid-template-columns: 96px 72px minmax(0, 1fr) 68px;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -535,6 +711,10 @@ textarea {
 
 .progress-status.failed {
   color: #8c2929;
+}
+
+.retry-button {
+  min-width: 68px;
 }
 
 @media (max-width: 900px) {

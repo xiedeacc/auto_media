@@ -6,12 +6,16 @@ build = "build.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+chrono = "0.4"
 
 [dependencies]
+ab_glyph = "0.2"
 anyhow = "1"
 aes = "0.8"
 async-trait = "0.1"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+imageproc = { version = "0.25", default-features = false }
 cbc = { version = "0.1", features = ["alloc"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

@@ -1,7 +1,10 @@
+use super::backend::{CookieStore, PublishBackend, PublishContent};
 use crate::{browser::cdp::BrowserCookie, topic_cache};
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
+use std::sync::Arc;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE};
 use serde_json::{json, Value};
 use sha1::Sha1;
@@ -15,6 +18,42 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 const MAX_ARTICLE_TOPICS: usize = 3;
 
 type HmacSha1 = Hmac<Sha1>;
+
+/// HTTP API backend for Zhihu: image OSS upload + draft + publish + topic sync.
+pub struct ZhihuApi {
+    cookies: Arc<CookieStore>,
+    topic_cache: PathBuf,
+}
+
+impl ZhihuApi {
+    pub fn new(cookies: Arc<CookieStore>, topic_cache: PathBuf) -> Self {
+        Self {
+            cookies,
+            topic_cache,
+        }
+    }
+}
+
+#[async_trait]
+impl PublishBackend for ZhihuApi {
+    async fn publish(&self, content: PublishContent<'_>) -> Result<String> {
+        let cookies = self.cookies.load_or_capture().await?;
+        let message = publish_image_article(
+            &cookies,
+            content.title,
+            content.body,
+            content.image_paths,
+            Some(&self.topic_cache),
+        )
+        .await?;
+        tracing::warn!(
+            image_count = content.image_paths.len(),
+            message = %message,
+            "zhihu api article submitted"
+        );
+        Ok(message)
+    }
+}
 
 pub async fn publish_image_article(
     cookies: &[BrowserCookie],
@@ -74,6 +113,21 @@ struct ZhihuSession {
     xsrf: String,
 }
 
+struct RegisteredImage {
+    image_id: String,
+    state: i64,
+    object_key: Option<String>,
+    upload_token: Option<Value>,
+}
+
+enum ImagePollOutcome {
+    Ready(ImageInfo),
+    Timeout {
+        image_id: String,
+        last_response: Value,
+    },
+}
+
 impl ZhihuSession {
     fn new(cookies: &[BrowserCookie]) -> Result<Self> {
         let filtered = cookies
@@ -106,14 +160,118 @@ impl ZhihuSession {
     async fn upload_image(&self, client: &reqwest::Client, path: &Path) -> Result<ImageInfo> {
         let bytes =
             std::fs::read(path).with_context(|| format!("read image {}", path.display()))?;
+        let content_type = image_content_type(path)?;
         let image_hash = format!("{:x}", md5::compute(&bytes));
+        for register_attempt in 1..=2 {
+            let registered = self
+                .register_image(client, &image_hash)
+                .await
+                .with_context(|| format!("知乎图片注册失败: {}", path.display()))?;
+            tracing::warn!(
+                image_hash,
+                register_attempt,
+                image_id = %registered.image_id,
+                state = registered.state,
+                object_key = registered.object_key.as_deref().unwrap_or(""),
+                "zhihu image registered"
+            );
+            if registered.state == 2 {
+                let object_key = registered
+                    .object_key
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("知乎图片注册响应缺少 object_key"))?;
+                let token = registered
+                    .upload_token
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("知乎图片注册响应缺少 upload_token"))?;
+                self.upload_to_oss(client, object_key, &bytes, content_type, token)
+                    .await?;
+                tracing::warn!(
+                    image_hash,
+                    register_attempt,
+                    image_id = %registered.image_id,
+                    object_key,
+                    content_type,
+                    "zhihu image uploaded to oss"
+                );
+                if let Some(confirmed) = self
+                    .confirm_uploaded_image(client, &image_hash, register_attempt)
+                    .await?
+                {
+                    match self.poll_image(client, &confirmed.image_id).await? {
+                        ImagePollOutcome::Ready(info) => return Ok(info),
+                        ImagePollOutcome::Timeout {
+                            image_id,
+                            last_response,
+                        } if register_attempt < 2
+                            && last_response.get("status").and_then(Value::as_str)
+                                == Some("init") =>
+                        {
+                            tracing::warn!(
+                                image_hash,
+                                image_id = %image_id,
+                                last_response = %compact_json(&last_response),
+                                "zhihu confirmed image stayed init after polling, re-registering same hash"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            continue;
+                        }
+                        ImagePollOutcome::Timeout {
+                            image_id,
+                            last_response,
+                        } => {
+                            anyhow::bail!(
+                                "知乎图片处理超时 image_id={image_id}，最后响应: {}",
+                                compact_json(&last_response)
+                            );
+                        }
+                    }
+                }
+            } else if registered.state != 1 {
+                anyhow::bail!("知乎图片注册返回未知 state={}", registered.state);
+            }
+
+            match self.poll_image(client, &registered.image_id).await? {
+                ImagePollOutcome::Ready(info) => return Ok(info),
+                ImagePollOutcome::Timeout {
+                    image_id,
+                    last_response,
+                } if register_attempt < 2
+                    && last_response.get("status").and_then(Value::as_str) == Some("init") =>
+                {
+                    tracing::warn!(
+                        image_hash,
+                        image_id = %image_id,
+                        last_response = %compact_json(&last_response),
+                        "zhihu image stayed init after polling, re-registering same hash"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                ImagePollOutcome::Timeout {
+                    image_id,
+                    last_response,
+                } => {
+                    anyhow::bail!(
+                        "知乎图片处理超时 image_id={image_id}，最后响应: {}",
+                        compact_json(&last_response)
+                    );
+                }
+            }
+        }
+        anyhow::bail!("知乎图片处理超时: {}", path.display())
+    }
+
+    async fn register_image(
+        &self,
+        client: &reqwest::Client,
+        image_hash: &str,
+    ) -> Result<RegisteredImage> {
         let register = client
             .post(IMAGE_API)
             .headers(self.headers()?)
             .json(&json!({ "image_hash": image_hash, "source": "article" }))
             .send()
-            .await
-            .context("知乎图片注册失败")?;
+            .await?;
         let data = handle_response(register).await?;
         let upload_file = data
             .get("upload_file")
@@ -131,20 +289,42 @@ impl ZhihuSession {
             .get("state")
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        if state == 2 {
-            let object_key = upload_file
-                .get("object_key")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("知乎图片注册响应缺少 object_key"))?;
-            let token = data
-                .get("upload_token")
-                .ok_or_else(|| anyhow!("知乎图片注册响应缺少 upload_token"))?;
-            self.upload_to_oss(client, object_key, &bytes, token)
-                .await?;
-        } else if state != 1 {
-            anyhow::bail!("知乎图片注册返回未知 state={state}");
+        let object_key = upload_file
+            .get("object_key")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let upload_token = data.get("upload_token").cloned();
+        Ok(RegisteredImage {
+            image_id,
+            state,
+            object_key,
+            upload_token,
+        })
+    }
+
+    async fn confirm_uploaded_image(
+        &self,
+        client: &reqwest::Client,
+        image_hash: &str,
+        register_attempt: usize,
+    ) -> Result<Option<RegisteredImage>> {
+        for confirm_attempt in 1..=3 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let confirmed = self.register_image(client, image_hash).await?;
+            tracing::warn!(
+                image_hash,
+                register_attempt,
+                confirm_attempt,
+                image_id = %confirmed.image_id,
+                state = confirmed.state,
+                object_key = confirmed.object_key.as_deref().unwrap_or(""),
+                "zhihu image confirm registration after oss upload"
+            );
+            if confirmed.state == 1 {
+                return Ok(Some(confirmed));
+            }
         }
-        self.poll_image(client, &image_id).await
+        Ok(None)
     }
 
     async fn upload_to_oss(
@@ -152,6 +332,7 @@ impl ZhihuSession {
         client: &reqwest::Client,
         object_key: &str,
         bytes: &[u8],
+        content_type: &'static str,
         token: &Value,
     ) -> Result<()> {
         let access_token = token
@@ -169,7 +350,6 @@ impl ZhihuSession {
         let date = chrono::Utc::now()
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
-        let content_type = "image/jpeg";
         let string_to_sign = format!(
             "PUT\n\n{content_type}\n{date}\nx-oss-security-token:{access_token}\n/zhihu-pics/{object_key}"
         );
@@ -192,8 +372,13 @@ impl ZhihuSession {
         Ok(())
     }
 
-    async fn poll_image(&self, client: &reqwest::Client, image_id: &str) -> Result<ImageInfo> {
-        for _ in 0..15 {
+    async fn poll_image(
+        &self,
+        client: &reqwest::Client,
+        image_id: &str,
+    ) -> Result<ImagePollOutcome> {
+        let mut last_response = Value::Null;
+        for attempt in 1..=15 {
             let response = client
                 .get(format!("{IMAGE_API}/{image_id}"))
                 .headers(self.headers()?)
@@ -201,8 +386,20 @@ impl ZhihuSession {
                 .await
                 .context("知乎图片处理状态查询失败")?;
             let data = handle_response(response).await?;
-            if data.get("status").and_then(Value::as_str) == Some("success") {
-                return Ok(ImageInfo {
+            last_response = data.clone();
+            let status = data
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            tracing::debug!(
+                image_id,
+                attempt,
+                status,
+                response = %compact_json(&data),
+                "zhihu image processing polled"
+            );
+            if status == "success" {
+                return Ok(ImagePollOutcome::Ready(ImageInfo {
                     src: required_str(&data, "src")?,
                     original_src: data
                         .get("original_src")
@@ -219,11 +416,20 @@ impl ZhihuSession {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string(),
-                });
+                }));
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if matches!(status, "failed" | "error" | "fail") {
+                anyhow::bail!(
+                    "知乎图片处理失败 image_id={image_id}: {}",
+                    compact_json(&data)
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
-        anyhow::bail!("知乎图片处理超时")
+        Ok(ImagePollOutcome::Timeout {
+            image_id: image_id.to_string(),
+            last_response,
+        })
     }
 
     async fn create_article(
@@ -437,6 +643,16 @@ fn required_str(value: &Value, field: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .ok_or_else(|| anyhow!("知乎响应缺少 {field}"))
+}
+
+fn image_content_type(path: &Path) -> Result<&'static str> {
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    match mime.essence_str() {
+        "image/jpeg" => Ok("image/jpeg"),
+        "image/png" => Ok("image/png"),
+        "image/webp" => Ok("image/webp"),
+        other => anyhow::bail!("知乎暂不支持该图片格式: {other} ({})", path.display()),
+    }
 }
 
 fn extract_article_id(value: &Value) -> Option<String> {

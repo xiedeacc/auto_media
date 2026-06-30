@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 mod app;
 mod browser;
@@ -12,6 +12,7 @@ mod startup;
 mod state;
 mod topic_cache;
 mod tray;
+mod watermark;
 
 fn main() {
     if let Err(error) = app::run() {

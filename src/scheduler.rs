@@ -4,10 +4,7 @@ use chrono::{Days, NaiveTime, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::{
-    sync::RwLock,
-    time::{sleep, Duration},
-};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeStatus {
@@ -51,43 +48,6 @@ impl Scheduler {
             config,
             publisher,
             status,
-        }
-    }
-
-    pub async fn run_forever(self) {
-        if self.config.scheduler.run_immediately_on_start && !self.status.read().await.paused {
-            if let Err(error) = self.tick("startup").await {
-                tracing::error!(?error, "startup tick failed");
-            }
-        }
-
-        loop {
-            let sleep_duration = self.next_sleep_duration().unwrap_or_else(|error| {
-                tracing::error!(?error, "calculate next sleep duration failed");
-                Duration::from_secs(self.config.scheduler.sleep_minutes.saturating_mul(60))
-            });
-            {
-                let mut status = self.status.write().await;
-                status.next_wakeup = Some(
-                    (chrono::Utc::now()
-                        + chrono::Duration::from_std(sleep_duration).unwrap_or_default())
-                    .to_rfc3339(),
-                );
-            }
-            sleep(sleep_duration).await;
-
-            let paused = self.status.read().await.paused;
-            if paused {
-                continue;
-            }
-
-            if let Err(error) = self.tick("schedule").await {
-                tracing::error!(?error, "scheduled tick failed");
-                let mut status = self.status.write().await;
-                status.state = "error".to_string();
-                status.last_message = error.to_string();
-                status.last_tick = Some(Utc::now().to_rfc3339());
-            }
         }
     }
 
@@ -172,40 +132,6 @@ impl Scheduler {
         Ok((active_start, active_end))
     }
 
-    fn next_sleep_duration(&self) -> Result<Duration> {
-        let tz: Tz = self
-            .config
-            .scheduler
-            .timezone
-            .parse()
-            .unwrap_or(chrono_tz::Asia::Shanghai);
-        let now = Utc::now().with_timezone(&tz);
-        let (active_start, active_end) = self.active_window()?;
-        let now_time = now.time();
-
-        if is_in_active_window(now_time, active_start, active_end) {
-            let active_seconds = self
-                .config
-                .scheduler
-                .active_sleep_minutes
-                .max(1)
-                .saturating_mul(60);
-            let end_at = now.date_naive().and_time(active_end);
-            let seconds_until_end = (end_at - now.naive_local()).num_seconds().max(1) as u64;
-            return Ok(Duration::from_secs(active_seconds.min(seconds_until_end)));
-        }
-
-        let target_date = if now_time < active_start {
-            now.date_naive()
-        } else {
-            now.date_naive()
-                .checked_add_days(Days::new(1))
-                .context("calculate next active date")?
-        };
-        let next_active_start = target_date.and_time(active_start);
-        let seconds = (next_active_start - now.naive_local()).num_seconds().max(1) as u64;
-        Ok(Duration::from_secs(seconds))
-    }
 }
 
 fn is_in_active_window(now: NaiveTime, active_start: NaiveTime, active_end: NaiveTime) -> bool {

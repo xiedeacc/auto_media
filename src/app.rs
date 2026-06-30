@@ -2,14 +2,17 @@ use crate::{
     browser::cdp::CdpBrowser,
     commands,
     config::{load_or_create, AppConfig, RuntimePaths},
-    platforms::{CdpPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
+    platforms::{MediaPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
     publish::{job::ManualPublishJob, Publisher},
     scheduler::{RuntimeStatus, Scheduler},
     state::StateStore,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use tauri::WindowEvent;
 use tokio::sync::RwLock;
 
@@ -24,6 +27,9 @@ pub struct AppController {
     state: Arc<StateStore>,
     scheduler: Scheduler,
     adapters: HashMap<Platform, Arc<dyn PlatformAdapter>>,
+    /// Default platform selection for the 手动发文 dialog. Runtime-adjustable so
+    /// UI edits take effect without a restart; also persisted to the config file.
+    manual_platforms: Mutex<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,6 +46,8 @@ pub struct PlatformSessionSummary {
     pub platform: String,
     pub status: SessionStatus,
     pub label: String,
+    /// Preferred backend: "cdp" or "api".
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +69,7 @@ impl AppController {
         ));
         let status = Arc::new(RwLock::new(RuntimeStatus::default()));
         let scheduler = Scheduler::new(config.clone(), publisher, status);
+        let manual_platforms = Mutex::new(config.publish.manual_platforms.clone());
 
         Ok(Self {
             paths,
@@ -68,6 +77,7 @@ impl AppController {
             state,
             scheduler,
             adapters,
+            manual_platforms,
         })
     }
 
@@ -93,7 +103,7 @@ impl AppController {
 
     pub async fn platform_sessions(&self) -> Vec<PlatformSessionSummary> {
         let mut sessions = Vec::new();
-        for platform in [Platform::Xhs, Platform::Zhihu, Platform::Twitter] {
+        for platform in Platform::ALL {
             if let Some(adapter) = self.adapters.get(&platform) {
                 let status = adapter.validate_session().await.unwrap_or_else(|error| {
                     SessionStatus::NetworkError {
@@ -104,6 +114,7 @@ impl AppController {
                     platform: platform.as_str().to_string(),
                     label: status.label().to_string(),
                     status,
+                    mode: if adapter.prefer_cdp() { "cdp" } else { "api" }.to_string(),
                 });
             }
         }
@@ -148,6 +159,11 @@ impl AppController {
             message: format!("准备发送到 {} 个平台", platform_names.len()),
         });
 
+        let mut reports: Vec<(Platform, String)> = Vec::new();
+        // One shared window, published to each platform's tab in turn (sequential =
+        // the driven tab is foreground, so trusted clicks land and it reads like a
+        // person). The first platform launches the window directly with its own URL,
+        // so there's no extra blank tab.
         for platform_name in &platform_names {
             let platform: Platform = platform_name.parse()?;
             let Some(adapter) = self.adapters.get(&platform) else {
@@ -157,7 +173,7 @@ impl AppController {
                     status: "failed".to_string(),
                     message: message.clone(),
                 });
-                messages.push(format!("{platform}: {message}"));
+                reports.push((platform, format!("{platform}: {message}")));
                 continue;
             };
 
@@ -167,97 +183,106 @@ impl AppController {
                 message: format!("正在发送到 {platform}"),
             });
 
-            let session_status = match adapter.validate_session().await {
-                Ok(status) => status,
-                Err(error) => {
-                    let message = format!("登录态检测失败：{error:#}");
-                    tracing::warn!(
-                        platform = %platform,
-                        error = %error,
-                        "manual publish session validation failed"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                    continue;
+            let adapter = adapter.clone();
+            let state = self.state.clone();
+            let job = job.clone();
+            let result: Result<(String, String)> = async {
+                    let session_status = match adapter.validate_session().await {
+                        Ok(status) => status,
+                        Err(error) => {
+                            let message = format!("登录态检测失败：{error:#}");
+                            tracing::warn!(
+                                platform = %platform,
+                                error = %error,
+                                "manual publish session validation failed"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            return Ok(("failed".to_string(), message));
+                        }
+                    };
+
+                    match session_status {
+                        SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
+                        status => {
+                            let message = status.label().to_string();
+                            tracing::warn!(
+                                platform = %platform,
+                                session_status = ?status,
+                                "manual publish session invalid"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            return Ok(("failed".to_string(), message));
+                        }
+                    }
+
+                    match adapter.publish_manual_article(&job).await {
+                        Ok(result) => {
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "success",
+                                result.remote_url.as_deref(),
+                                None,
+                            )?;
+                            Ok(("success".to_string(), result.message))
+                        }
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            tracing::warn!(
+                                platform = %platform,
+                                error = %message,
+                                "manual publish platform failed"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            Ok(("failed".to_string(), message))
+                        }
+                    }
                 }
+                .await;
+            let (status, message) = match result {
+                Ok(result) => result,
+                Err(error) => ("failed".to_string(), format!("{error:#}")),
             };
-
-            match session_status {
-                SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
-                status => {
-                    let message = status.label().to_string();
-                    tracing::warn!(
-                        platform = %platform,
-                        session_status = ?status,
-                        "manual publish session invalid"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                    continue;
-                }
-            }
-
-            match adapter.publish_manual_article(&job).await {
-                Ok(result) => {
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "success",
-                        result.remote_url.as_deref(),
-                        None,
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "success".to_string(),
-                        message: result.message.clone(),
-                    });
-                    messages.push(format!("{platform}: {}", result.message));
-                }
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    tracing::warn!(
-                        platform = %platform,
-                        error = %message,
-                        "manual publish platform failed"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                }
-            }
+            progress(ManualPublishProgress {
+                platform: Some(platform.to_string()),
+                status: status.clone(),
+                message: message.clone(),
+            });
+            reports.push((platform, format!("{platform}: {message}")));
         }
+
+        // Publishing done — close the shared browser, unless a tab needs the user
+        // to finish a verification (SMS/captcha), in which case keep it open.
+        let kept_open = !self.finish_browser_after_publish().await;
+        if kept_open {
+            messages.push("⚠ 检测到平台需要人工验证（如短信验证码），已保留浏览器窗口，请在窗口中完成验证后手动关闭".to_string());
+        }
+
+        reports.sort_by_key(|(platform, _)| {
+            platform_names
+                .iter()
+                .position(|name| name == platform.as_str())
+                .unwrap_or(usize::MAX)
+        });
+        messages.extend(reports.into_iter().map(|(_, message)| message));
 
         let message = messages.join("\n");
         let records = self.state.recent_platform_statuses(30)?;
@@ -272,8 +297,60 @@ impl AppController {
         Ok(message)
     }
 
-    pub fn scheduler(&self) -> Scheduler {
-        self.scheduler.clone()
+    pub fn set_platform_mode(&self, platform: Platform, prefer_cdp: bool) -> Result<()> {
+        if let Some(adapter) = self.adapters.get(&platform) {
+            adapter.set_prefer_cdp(prefer_cdp);
+        }
+        let mode = if prefer_cdp { "cdp" } else { "api" };
+        crate::config::update_platform_mode(&self.paths, platform, mode)
+    }
+
+    /// Per-platform watermark settings for the UI: `{ platform, enabled, text }`.
+    pub fn watermark_settings(&self) -> Vec<serde_json::Value> {
+        Platform::ALL
+            .iter()
+            .filter_map(|platform| {
+                self.adapters.get(platform).map(|adapter| {
+                    serde_json::json!({
+                        "platform": platform.as_str(),
+                        "enabled": adapter.watermark_enabled(),
+                        "text": adapter.watermark_text(),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    pub fn set_platform_watermark(
+        &self,
+        platform: Platform,
+        enabled: bool,
+        text: String,
+    ) -> Result<()> {
+        if let Some(adapter) = self.adapters.get(&platform) {
+            adapter.set_watermark(enabled, text.clone());
+        }
+        crate::config::update_platform_watermark(&self.paths, platform, enabled, &text)
+    }
+
+    /// Return a path to `src` stamped with `platform`'s current watermark (using
+    /// the live adapter settings). If that platform has watermarking off or no
+    /// text, the original path is returned unchanged.
+    pub fn watermark_preview(
+        &self,
+        src: &std::path::Path,
+        platform: Platform,
+    ) -> Result<std::path::PathBuf> {
+        let Some(adapter) = self.adapters.get(&platform) else {
+            return Ok(src.to_path_buf());
+        };
+        let text = adapter.watermark_text();
+        let text = text.trim();
+        if !adapter.watermark_enabled() || text.is_empty() {
+            return Ok(src.to_path_buf());
+        }
+        let out_dir = std::env::temp_dir().join("auto_media_watermark_preview");
+        crate::watermark::apply(src, &out_dir, &format!("preview_{}", platform.as_str()), text)
     }
 
     pub fn path_summary(&self) -> PathSummary {
@@ -294,45 +371,54 @@ impl AppController {
         self.config.publish.title_pattern.clone()
     }
 
-    pub async fn close_browser_tabs(&self) {
-        let browser = CdpBrowser::default();
-        for (platform, enabled, port) in [
-            (
-                Platform::Xhs,
-                self.config.platforms.xhs.enabled,
-                self.config.platforms.xhs.cdp_port,
-            ),
-            (
-                Platform::Zhihu,
-                self.config.platforms.zhihu.enabled,
-                self.config.platforms.zhihu.cdp_port,
-            ),
-            (
-                Platform::Twitter,
-                self.config.platforms.twitter.enabled,
-                self.config.platforms.twitter.cdp_port,
-            ),
-        ] {
-            if !enabled {
-                continue;
-            }
+    /// The 手动发文 dialog's default platform selection.
+    pub fn manual_platforms(&self) -> Vec<String> {
+        self.manual_platforms.lock().unwrap().clone()
+    }
 
-            match browser.close_all_tabs(port).await {
-                Ok(count) if count > 0 => tracing::info!(
-                    platform = %platform,
-                    port,
-                    count,
-                    "closed browser tabs"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(
-                    platform = %platform,
-                    port,
-                    error = %error,
-                    "failed to close browser tabs"
-                ),
-            }
+    /// Update the 手动发文 default selection at runtime and persist it.
+    pub fn set_manual_platforms(&self, platforms: Vec<String>) -> Result<()> {
+        crate::config::update_manual_platforms(&self.paths, &platforms)?;
+        *self.manual_platforms.lock().unwrap() = platforms;
+        Ok(())
+    }
+
+    pub async fn close_browser_tabs(&self) {
+        let port = crate::config::SHARED_CDP_PORT;
+        match CdpBrowser.close_browser(port).await {
+            Ok(()) => tracing::info!(port, "closed shared browser"),
+            Err(error) => tracing::warn!(port, error = %error, "failed to close shared browser"),
         }
+    }
+
+    /// Close the shared browser after a publish. If a tab is showing a
+    /// verification the user must complete (SMS/captcha/scan), wait for them to
+    /// finish it before closing — polling until the prompt clears, up to a
+    /// timeout. Only keep the window open if verification is still pending when
+    /// the timeout elapses. Returns whether it was closed.
+    pub async fn finish_browser_after_publish(&self) -> bool {
+        use tokio::time::{sleep, Duration, Instant};
+        let port = crate::config::SHARED_CDP_PORT;
+
+        if CdpBrowser.has_pending_intervention(port).await {
+            tracing::warn!(port, "verification prompt detected; waiting for user to complete it");
+            // Give the user up to 5 minutes to enter the SMS code / solve the
+            // captcha. Re-check periodically; close as soon as it clears.
+            let deadline = Instant::now() + Duration::from_secs(300);
+            while Instant::now() < deadline {
+                sleep(Duration::from_secs(3)).await;
+                if !CdpBrowser.has_pending_intervention(port).await {
+                    tracing::info!(port, "verification completed; closing browser");
+                    self.close_browser_tabs().await;
+                    return true;
+                }
+            }
+            tracing::warn!(port, "verification still pending after timeout; keeping browser open");
+            return false;
+        }
+
+        self.close_browser_tabs().await;
+        true
     }
 }
 
@@ -376,6 +462,9 @@ pub fn run() -> Result<()> {
             commands::clear_records,
             commands::set_paused,
             commands::login_platform,
+            commands::set_platform_mode,
+            commands::set_manual_platforms,
+            commands::set_platform_watermark,
             commands::set_autostart,
             commands::open_dir,
         ])
@@ -390,10 +479,8 @@ pub fn run() -> Result<()> {
                 crate::startup::hide_main_window(app.handle());
             }
 
-            let scheduler = controller.scheduler();
-            tauri::async_runtime::spawn(async move {
-                scheduler.run_forever().await;
-            });
+            // Automatic detection/publishing is disabled; publishing is manual only.
+            let _ = &controller;
 
             Ok(())
         })
@@ -418,42 +505,26 @@ fn build_adapters(
 ) -> HashMap<Platform, Arc<dyn PlatformAdapter>> {
     let mut adapters: HashMap<Platform, Arc<dyn PlatformAdapter>> = HashMap::new();
 
-    if config.platforms.xhs.enabled {
+    for platform in Platform::ALL {
+        let section = config.platforms.section_for(platform);
+        if !section.enabled {
+            continue;
+        }
+        // All platforms share one Chrome profile + port → one window, tabs per
+        // platform. The per-platform login_url/write_url still differ.
+        let mut section = section.clone();
+        section.cdp_port = crate::config::SHARED_CDP_PORT;
         adapters.insert(
-            Platform::Xhs,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Xhs,
-                config.platforms.xhs.clone(),
-                paths.browser_profiles_dir.join("xhs"),
-                paths.auth_dir.join("xhs.cookies.enc"),
+            platform,
+            Arc::new(MediaPlatformAdapter::new(
+                platform,
+                section,
+                paths.shared_profile_dir.clone(),
+                paths
+                    .auth_dir
+                    .join(format!("{}.cookies.enc", platform.as_str())),
                 paths.conf_dir.join("topic_cache.json"),
-            )),
-        );
-    }
-
-    if config.platforms.zhihu.enabled {
-        adapters.insert(
-            Platform::Zhihu,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Zhihu,
-                config.platforms.zhihu.clone(),
-                paths.browser_profiles_dir.join("zhihu"),
-                paths.auth_dir.join("zhihu.cookies.enc"),
-                paths.conf_dir.join("topic_cache.json"),
-            )),
-        );
-    }
-
-    if config.platforms.twitter.enabled {
-        adapters.insert(
-            Platform::Twitter,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Twitter,
-                config.platforms.twitter.clone(),
-                paths.browser_profiles_dir.join("twitter"),
-                paths.auth_dir.join("twitter.cookies.enc"),
-                paths.conf_dir.join("topic_cache.json"),
-            )),
+            )) as Arc<dyn PlatformAdapter>,
         );
     }
 

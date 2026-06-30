@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Auto Media</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=10" />
   </head>
   <body>
     <main class="shell">
@@ -15,60 +15,61 @@
         </div>
         <div class="actions">
           <button id="manual-post" type="button">手动发文</button>
-          <button id="run-now" type="button">立即检测</button>
-          <button id="pause-toggle" type="button">启动</button>
           <button id="logs-button" type="button">日志</button>
         </div>
       </header>
 
-      <section class="status-grid">
-        <article class="panel">
-          <span class="label">运行状态</span>
-          <strong id="state">-</strong>
-          <small id="last-tick">-</small>
-        </article>
-        <article class="panel">
-          <span class="label">最近检测</span>
-          <strong id="recent-check">-</strong>
-          <span class="label stacked">下次唤醒</span>
-          <strong id="next-wakeup">-</strong>
-          <small>每 10 分钟检测一次</small>
-        </article>
-        <article class="panel">
-          <span class="label">开机自启动</span>
-          <label class="switch">
-            <input id="autostart" type="checkbox" />
-            <span></span>
-          </label>
-          <small>当前用户启动项</small>
-        </article>
-      </section>
-
       <section class="workspace">
         <div class="platforms">
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">小红书</span>
-              <strong>CDP</strong>
               <small class="platform-status unknown" data-platform-status="xhs">检测中</small>
             </div>
-            <button data-login="xhs" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="xhs" type="button">CDP</button>
+              <button data-login="xhs" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">知乎</span>
-              <strong>CDP</strong>
               <small class="platform-status unknown" data-platform-status="zhihu">检测中</small>
             </div>
-            <button data-login="zhihu" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="zhihu" type="button">CDP</button>
+              <button data-login="zhihu" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">Twitter/X</span>
-              <strong>CDP</strong>
               <small class="platform-status unknown" data-platform-status="twitter">检测中</small>
             </div>
-            <button data-login="twitter" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="twitter" type="button">CDP</button>
+              <button data-login="twitter" type="button">登录</button>
+            </div>
+          </article>
+          <article class="platform">
+            <div class="platform-info">
+              <span class="label">雪球</span>
+              <small class="platform-status unknown" data-platform-status="xueqiu">检测中</small>
+            </div>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="xueqiu" type="button">CDP</button>
+              <button data-login="xueqiu" type="button">登录</button>
+            </div>
+          </article>
+          <article class="platform">
+            <div class="platform-info">
+              <span class="label">抖音</span>
+              <small class="platform-status unknown" data-platform-status="douyin">检测中</small>
+            </div>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="douyin" type="button">CDP</button>
+              <button data-login="douyin" type="button">登录</button>
+            </div>
           </article>
         </div>
 
@@ -104,6 +105,12 @@
       </section>
     </main>
 
+    <footer class="statusbar">
+      <button id="settings-button" class="statusbar-icon" type="button" title="配置" aria-label="配置">⚙</button>
+      <span id="statusbar-text" class="statusbar-text">就绪</span>
+      <span id="statusbar-build" class="statusbar-build"></span>
+    </footer>
+
     <div id="manual-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-backdrop" data-close-manual></div>
       <section class="modal-panel">
@@ -124,7 +131,7 @@
               <span class="label">平台</span>
               <div class="platform-picker">
                 <label>
-                  <input type="checkbox" name="manual-platform" value="xhs" checked />
+                  <input type="checkbox" name="manual-platform" value="xhs" />
                   <span>小红书</span>
                 </label>
                 <label>
@@ -134,6 +141,14 @@
                 <label>
                   <input type="checkbox" name="manual-platform" value="twitter" checked />
                   <span>Twitter/X</span>
+                </label>
+                <label>
+                  <input type="checkbox" name="manual-platform" value="xueqiu" checked />
+                  <span>雪球</span>
+                </label>
+                <label>
+                  <input type="checkbox" name="manual-platform" value="douyin" checked />
+                  <span>抖音</span>
                 </label>
               </div>
             </div>
@@ -163,6 +178,31 @@
           <button data-close-manual type="button">取消</button>
           <button id="submit-manual" type="button">发送</button>
         </footer>
+      </section>
+    </div>
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-settings></div>
+      <section class="modal-panel settings-panel">
+        <header class="modal-head">
+          <h2>配置</h2>
+          <button class="icon-button" data-close-settings type="button">×</button>
+        </header>
+        <div class="settings-body">
+          <div class="settings-row">
+            <span class="label">开机自启动</span>
+            <label class="switch">
+              <input id="autostart" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="label">图片水印</span>
+              <small class="hint">发布前在图片右下角加水印。小红书/抖音建议用纯品牌词，避免站外引流违规。</small>
+            </div>
+            <div id="watermark-list" class="watermark-list"></div>
+          </div>
+        </div>
       </section>
     </div>
     <div id="logs-modal" class="modal hidden" role="dialog" aria-modal="true">
@@ -198,6 +238,6 @@
         <div id="progress-list" class="progress-list"></div>
       </section>
     </div>
-    <script src="./main.js"></script>
+    <script src="./main.js?v=11"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
 use crate::{platforms::Platform, publish::job::PublishJob};
 use anyhow::{Context, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex};
@@ -128,25 +128,6 @@ impl StateStore {
         } else {
             Ok(false)
         }
-    }
-
-    pub fn has_success_for_target_date(&self, target_date: NaiveDate) -> Result<bool> {
-        let conn = self.conn.lock().expect("state mutex poisoned");
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT EXISTS(
-              SELECT 1
-              FROM publish_jobs job
-              INNER JOIN publish_platform_status status
-                ON status.job_id = job.job_id
-              WHERE job.target_date = ?1
-                AND status.status = 'success'
-              LIMIT 1
-            )
-            "#,
-        )?;
-        let exists: i64 = stmt.query_row(params![target_date.to_string()], |row| row.get(0))?;
-        Ok(exists != 0)
     }
 
     pub fn mark_platform(

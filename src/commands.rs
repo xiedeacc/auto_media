@@ -17,7 +17,11 @@ pub async fn get_status(
         "paths": state.controller.path_summary(),
         "publish_tags": state.controller.publish_tags(),
         "publish_title_pattern": state.controller.publish_title_pattern(),
-        "autostart_enabled": autostart
+        "manual_platforms": state.controller.manual_platforms(),
+        "watermarks": state.controller.watermark_settings(),
+        "autostart_enabled": autostart,
+        "build_commit": env!("GIT_HASH"),
+        "build_time": env!("BUILD_TIME")
     });
     Ok(payload)
 }
@@ -69,8 +73,23 @@ pub async fn save_pasted_image(
 }
 
 #[tauri::command]
-pub async fn read_image_preview(path: String) -> Result<String, String> {
-    let path = std::path::PathBuf::from(path);
+pub async fn read_image_preview(
+    state: State<'_, SharedState>,
+    path: String,
+    platform: Option<String>,
+) -> Result<String, String> {
+    let mut path = std::path::PathBuf::from(path);
+    // Preview the image as it will be published: stamped with the first selected
+    // platform's watermark. Falls back to the original on any watermark failure.
+    if let Some(platform) = platform.filter(|name| !name.is_empty()) {
+        let platform = platform
+            .parse::<Platform>()
+            .map_err(|error| error.to_string())?;
+        match state.controller.watermark_preview(&path, platform) {
+            Ok(watermarked) => path = watermarked,
+            Err(error) => tracing::warn!(error = %error, "watermark preview failed; showing original"),
+        }
+    }
     let mime = mime_guess::from_path(&path)
         .first_or_octet_stream()
         .essence_str()
@@ -197,6 +216,49 @@ pub async fn login_platform(state: State<'_, SharedState>, platform: String) -> 
         .controller
         .login_platform(platform)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_platform_mode(
+    state: State<'_, SharedState>,
+    platform: String,
+    mode: String,
+) -> Result<(), String> {
+    let platform = platform
+        .parse::<Platform>()
+        .map_err(|error| error.to_string())?;
+    let prefer_cdp = !mode.eq_ignore_ascii_case("api");
+    state
+        .controller
+        .set_platform_mode(platform, prefer_cdp)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_manual_platforms(
+    state: State<'_, SharedState>,
+    platforms: Vec<String>,
+) -> Result<(), String> {
+    state
+        .controller
+        .set_manual_platforms(platforms)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_platform_watermark(
+    state: State<'_, SharedState>,
+    platform: String,
+    enabled: bool,
+    text: String,
+) -> Result<(), String> {
+    let platform = platform
+        .parse::<Platform>()
+        .map_err(|error| error.to_string())?;
+    state
+        .controller
+        .set_platform_watermark(platform, enabled, text)
         .map_err(|error| error.to_string())
 }
 

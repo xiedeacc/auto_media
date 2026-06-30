@@ -1,9 +1,16 @@
+use crate::platforms::Platform;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+/// Every platform shares ONE Chrome profile + debug port, so manual publishing
+/// opens a single window with one tab per platform (not a process per profile).
+pub const SHARED_CDP_PORT: u16 = 9222;
+/// Sub-directory name of the shared Chrome profile under `browser_profiles`.
+pub const SHARED_PROFILE_NAME: &str = "shared";
 
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
@@ -14,6 +21,7 @@ pub struct RuntimePaths {
     pub logs_dir: PathBuf,
     pub auth_dir: PathBuf,
     pub browser_profiles_dir: PathBuf,
+    pub shared_profile_dir: PathBuf,
     pub config_file: PathBuf,
     pub state_file: PathBuf,
 }
@@ -37,6 +45,7 @@ impl RuntimePaths {
         let logs_dir = root.join("logs");
         let auth_dir = conf_dir.join("auth");
         let browser_profiles_dir = conf_dir.join("browser_profiles");
+        let shared_profile_dir = browser_profiles_dir.join(SHARED_PROFILE_NAME);
         let config_file = conf_dir.join("auto_media.toml");
         let state_file = conf_dir.join("state.sqlite");
 
@@ -48,6 +57,7 @@ impl RuntimePaths {
             logs_dir,
             auth_dir,
             browser_profiles_dir,
+            shared_profile_dir,
             config_file,
             state_file,
         })
@@ -61,8 +71,7 @@ impl RuntimePaths {
             &self.logs_dir,
             &self.auth_dir,
             &self.browser_profiles_dir,
-            &self.browser_profiles_dir.join("xhs"),
-            &self.browser_profiles_dir.join("zhihu"),
+            &self.shared_profile_dir,
         ] {
             fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         }
@@ -144,6 +153,17 @@ pub struct PublishSection {
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
     pub publish_platforms: Vec<String>,
+    /// Platforms pre-checked in the 手动发文 dialog. Absent → defaults below.
+    #[serde(default = "default_manual_platforms")]
+    pub manual_platforms: Vec<String>,
+}
+
+fn default_manual_platforms() -> Vec<String> {
+    // Xiaohongshu off by default (stricter review); the rest on.
+    ["zhihu", "twitter", "xueqiu", "douyin"]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn default_tags() -> Vec<String> {
@@ -175,6 +195,32 @@ pub struct PlatformSections {
     pub zhihu: PlatformSection,
     #[serde(default = "default_twitter_platform")]
     pub twitter: PlatformSection,
+    #[serde(default = "default_xueqiu_platform")]
+    pub xueqiu: PlatformSection,
+    #[serde(default = "default_douyin_platform")]
+    pub douyin: PlatformSection,
+}
+
+impl PlatformSections {
+    pub fn section_for(&self, platform: Platform) -> &PlatformSection {
+        match platform {
+            Platform::Xhs => &self.xhs,
+            Platform::Zhihu => &self.zhihu,
+            Platform::Twitter => &self.twitter,
+            Platform::Xueqiu => &self.xueqiu,
+            Platform::Douyin => &self.douyin,
+        }
+    }
+
+    pub fn section_for_mut(&mut self, platform: Platform) -> &mut PlatformSection {
+        match platform {
+            Platform::Xhs => &mut self.xhs,
+            Platform::Zhihu => &mut self.zhihu,
+            Platform::Twitter => &mut self.twitter,
+            Platform::Xueqiu => &mut self.xueqiu,
+            Platform::Douyin => &mut self.douyin,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +231,13 @@ pub struct PlatformSection {
     pub write_url: Option<String>,
     pub creator_url: Option<String>,
     pub cdp_port: u16,
+    /// Text stamped onto images before upload. Absent/empty → the platform's
+    /// built-in default text is used.
+    #[serde(default)]
+    pub watermark: Option<String>,
+    /// Whether to stamp the watermark. Absent → on by default.
+    #[serde(default)]
+    pub watermark_enabled: Option<bool>,
 }
 
 fn default_twitter_platform() -> PlatformSection {
@@ -195,6 +248,36 @@ fn default_twitter_platform() -> PlatformSection {
         creator_url: Some("https://x.com".to_string()),
         write_url: Some("https://x.com/home".to_string()),
         cdp_port: 9225,
+        watermark: Some("https://blog.xiedeacc.com".to_string()),
+        watermark_enabled: Some(true),
+    }
+}
+
+fn default_xueqiu_platform() -> PlatformSection {
+    PlatformSection {
+        enabled: true,
+        mode: "cdp".to_string(),
+        login_url: "https://xueqiu.com".to_string(),
+        creator_url: Some("https://xueqiu.com".to_string()),
+        write_url: Some("https://xueqiu.com".to_string()),
+        cdp_port: 9226,
+        watermark: Some("https://blog.xiedeacc.com".to_string()),
+        watermark_enabled: Some(true),
+    }
+}
+
+fn default_douyin_platform() -> PlatformSection {
+    PlatformSection {
+        enabled: true,
+        mode: "cdp".to_string(),
+        login_url: "https://www.douyin.com".to_string(),
+        creator_url: Some("https://creator.douyin.com".to_string()),
+        write_url: Some(
+            "https://creator.douyin.com/creator-micro/content/upload?default-tab=3".to_string(),
+        ),
+        cdp_port: 9227,
+        watermark: Some("xiedeacc".to_string()),
+        watermark_enabled: Some(true),
     }
 }
 
@@ -250,7 +333,10 @@ impl Default for AppConfig {
                     "xhs".to_string(),
                     "zhihu".to_string(),
                     "twitter".to_string(),
+                    "xueqiu".to_string(),
+                    "douyin".to_string(),
                 ],
+                manual_platforms: default_manual_platforms(),
             },
             platforms: PlatformSections {
                 xhs: PlatformSection {
@@ -260,6 +346,8 @@ impl Default for AppConfig {
                     creator_url: Some("https://creator.xiaohongshu.com".to_string()),
                     write_url: Some("https://creator.xiaohongshu.com/publish/publish".to_string()),
                     cdp_port: 9223,
+                    watermark: Some("xiedeacc".to_string()),
+                    watermark_enabled: Some(true),
                 },
                 zhihu: PlatformSection {
                     enabled: true,
@@ -268,6 +356,8 @@ impl Default for AppConfig {
                     creator_url: None,
                     write_url: Some("https://zhuanlan.zhihu.com/write".to_string()),
                     cdp_port: 9224,
+                    watermark: Some("https://blog.xiedeacc.com".to_string()),
+                    watermark_enabled: Some(true),
                 },
                 twitter: PlatformSection {
                     enabled: true,
@@ -276,7 +366,11 @@ impl Default for AppConfig {
                     creator_url: Some("https://x.com".to_string()),
                     write_url: Some("https://x.com/home".to_string()),
                     cdp_port: 9225,
+                    watermark: Some("https://blog.xiedeacc.com".to_string()),
+                    watermark_enabled: Some(true),
                 },
+                xueqiu: default_xueqiu_platform(),
+                douyin: default_douyin_platform(),
             },
             startup: StartupSection {
                 enabled: true,
@@ -300,11 +394,111 @@ pub fn load_or_create(paths: &RuntimePaths) -> Result<AppConfig> {
     }
 }
 
+/// Persist a single platform's preferred backend mode ("cdp" or "api") to the
+/// config file, preserving all other current on-disk settings.
+pub fn update_platform_mode(paths: &RuntimePaths, platform: Platform, mode: &str) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    config.platforms.section_for_mut(platform).mode = mode.to_string();
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
+}
+
+/// Persist the 手动发文 default platform selection, preserving all other
+/// current on-disk settings.
+pub fn update_manual_platforms(paths: &RuntimePaths, platforms: &[String]) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    config.publish.manual_platforms = platforms.to_vec();
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
+}
+
+/// Persist a single platform's watermark setting (on/off + text), preserving all
+/// other current on-disk settings.
+pub fn update_platform_watermark(
+    paths: &RuntimePaths,
+    platform: Platform,
+    enabled: bool,
+    text: &str,
+) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    let section = config.platforms.section_for_mut(platform);
+    section.watermark = Some(text.to_string());
+    section.watermark_enabled = Some(enabled);
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
+}
+
 pub fn resolve_configured_data_dir(paths: &RuntimePaths, config: &AppConfig) -> PathBuf {
     let data = PathBuf::from(&config.data.dir);
     if data.is_absolute() {
         data
     } else {
         paths.root.join(data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A legacy config written before Xueqiu/Douyin existed must still parse, with
+    /// the two new platform sections supplied by their serde defaults.
+    #[test]
+    fn legacy_three_platform_config_parses_with_new_platform_defaults() {
+        let legacy = r#"
+[app]
+start_minimized = true
+single_instance = true
+
+[scheduler]
+timezone = "Asia/Shanghai"
+run_immediately_on_start = true
+
+[data]
+dir = "data"
+image_patterns = ["*{YYYYMMDD}*.jpg"]
+multi_image_policy = "newest"
+
+[publish]
+title_pattern = "x"
+fallback_body_text = "x"
+publish_platforms = ["xhs", "zhihu", "twitter"]
+
+[platforms.xhs]
+enabled = true
+mode = "cdp"
+login_url = "https://www.xiaohongshu.com"
+write_url = "https://creator.xiaohongshu.com/publish/publish"
+cdp_port = 9223
+
+[platforms.zhihu]
+enabled = true
+mode = "cdp"
+login_url = "https://www.zhihu.com/signin"
+cdp_port = 9224
+
+[platforms.twitter]
+enabled = true
+mode = "cdp"
+login_url = "https://x.com/i/flow/login"
+cdp_port = 9225
+
+[startup]
+enabled = true
+minimize_to_tray_on_autostart = true
+"#;
+
+        let config: AppConfig = toml::from_str(legacy).expect("legacy config parses");
+        assert_eq!(config.platforms.section_for(Platform::Xueqiu).cdp_port, 9226);
+        assert_eq!(config.platforms.section_for(Platform::Douyin).cdp_port, 9227);
+        assert!(config.platforms.douyin.enabled);
+        // The legacy scheduled platform list is preserved untouched.
+        assert_eq!(
+            config.publish.publish_platforms,
+            vec!["xhs", "zhihu", "twitter"]
+        );
     }
 }

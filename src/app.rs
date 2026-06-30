@@ -2,12 +2,13 @@ use crate::{
     browser::cdp::CdpBrowser,
     commands,
     config::{load_or_create, AppConfig, RuntimePaths},
-    platforms::{CdpPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
+    platforms::{MediaPlatformAdapter, Platform, PlatformAdapter, SessionStatus},
     publish::{job::ManualPublishJob, Publisher},
     scheduler::{RuntimeStatus, Scheduler},
     state::StateStore,
 };
 use anyhow::{Context, Result};
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tauri::WindowEvent;
@@ -93,7 +94,7 @@ impl AppController {
 
     pub async fn platform_sessions(&self) -> Vec<PlatformSessionSummary> {
         let mut sessions = Vec::new();
-        for platform in [Platform::Xhs, Platform::Zhihu, Platform::Twitter] {
+        for platform in Platform::ALL {
             if let Some(adapter) = self.adapters.get(&platform) {
                 let status = adapter.validate_session().await.unwrap_or_else(|error| {
                     SessionStatus::NetworkError {
@@ -148,6 +149,8 @@ impl AppController {
             message: format!("准备发送到 {} 个平台", platform_names.len()),
         });
 
+        let mut publish_tasks = FuturesUnordered::new();
+        let mut reports: Vec<(Platform, String)> = Vec::new();
         for platform_name in &platform_names {
             let platform: Platform = platform_name.parse()?;
             let Some(adapter) = self.adapters.get(&platform) else {
@@ -157,7 +160,7 @@ impl AppController {
                     status: "failed".to_string(),
                     message: message.clone(),
                 });
-                messages.push(format!("{platform}: {message}"));
+                reports.push((platform, format!("{platform}: {message}")));
                 continue;
             };
 
@@ -167,97 +170,105 @@ impl AppController {
                 message: format!("正在发送到 {platform}"),
             });
 
-            let session_status = match adapter.validate_session().await {
-                Ok(status) => status,
-                Err(error) => {
-                    let message = format!("登录态检测失败：{error:#}");
-                    tracing::warn!(
-                        platform = %platform,
-                        error = %error,
-                        "manual publish session validation failed"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                    continue;
-                }
-            };
+            let adapter = adapter.clone();
+            let state = self.state.clone();
+            let job = job.clone();
+            publish_tasks.push(async move {
+                let result: Result<(String, String)> = async {
+                    let session_status = match adapter.validate_session().await {
+                        Ok(status) => status,
+                        Err(error) => {
+                            let message = format!("登录态检测失败：{error:#}");
+                            tracing::warn!(
+                                platform = %platform,
+                                error = %error,
+                                "manual publish session validation failed"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            return Ok(("failed".to_string(), message));
+                        }
+                    };
 
-            match session_status {
-                SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
-                status => {
-                    let message = status.label().to_string();
-                    tracing::warn!(
-                        platform = %platform,
-                        session_status = ?status,
-                        "manual publish session invalid"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                    continue;
-                }
-            }
+                    match session_status {
+                        SessionStatus::Valid { .. } | SessionStatus::RiskVerificationRequired => {}
+                        status => {
+                            let message = status.label().to_string();
+                            tracing::warn!(
+                                platform = %platform,
+                                session_status = ?status,
+                                "manual publish session invalid"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            return Ok(("failed".to_string(), message));
+                        }
+                    }
 
-            match adapter.publish_manual_article(&job).await {
-                Ok(result) => {
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "success",
-                        result.remote_url.as_deref(),
-                        None,
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "success".to_string(),
-                        message: result.message.clone(),
-                    });
-                    messages.push(format!("{platform}: {}", result.message));
+                    match adapter.publish_manual_article(&job).await {
+                        Ok(result) => {
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "success",
+                                result.remote_url.as_deref(),
+                                None,
+                            )?;
+                            Ok(("success".to_string(), result.message))
+                        }
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            tracing::warn!(
+                                platform = %platform,
+                                error = %message,
+                                "manual publish platform failed"
+                            );
+                            state.mark_platform(
+                                &job.job_id,
+                                platform,
+                                "failed",
+                                None,
+                                Some(&message),
+                            )?;
+                            Ok(("failed".to_string(), message))
+                        }
+                    }
                 }
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    tracing::warn!(
-                        platform = %platform,
-                        error = %message,
-                        "manual publish platform failed"
-                    );
-                    self.state.mark_platform(
-                        &job.job_id,
-                        platform,
-                        "failed",
-                        None,
-                        Some(&message),
-                    )?;
-                    progress(ManualPublishProgress {
-                        platform: Some(platform.to_string()),
-                        status: "failed".to_string(),
-                        message: message.clone(),
-                    });
-                    messages.push(format!("{platform}: {message}"));
-                }
-            }
+                .await;
+                (platform, result)
+            });
         }
+
+        while let Some((platform, result)) = publish_tasks.next().await {
+            let (status, message) = match result {
+                Ok(result) => result,
+                Err(error) => ("failed".to_string(), format!("{error:#}")),
+            };
+            progress(ManualPublishProgress {
+                platform: Some(platform.to_string()),
+                status: status.clone(),
+                message: message.clone(),
+            });
+            reports.push((platform, format!("{platform}: {message}")));
+        }
+
+        reports.sort_by_key(|(platform, _)| {
+            platform_names
+                .iter()
+                .position(|name| name == platform.as_str())
+                .unwrap_or(usize::MAX)
+        });
+        messages.extend(reports.into_iter().map(|(_, message)| message));
 
         let message = messages.join("\n");
         let records = self.state.recent_platform_statuses(30)?;
@@ -295,27 +306,13 @@ impl AppController {
     }
 
     pub async fn close_browser_tabs(&self) {
-        let browser = CdpBrowser::default();
-        for (platform, enabled, port) in [
-            (
-                Platform::Xhs,
-                self.config.platforms.xhs.enabled,
-                self.config.platforms.xhs.cdp_port,
-            ),
-            (
-                Platform::Zhihu,
-                self.config.platforms.zhihu.enabled,
-                self.config.platforms.zhihu.cdp_port,
-            ),
-            (
-                Platform::Twitter,
-                self.config.platforms.twitter.enabled,
-                self.config.platforms.twitter.cdp_port,
-            ),
-        ] {
-            if !enabled {
+        let browser = CdpBrowser;
+        for platform in Platform::ALL {
+            let section = self.config.platforms.section_for(platform);
+            if !section.enabled {
                 continue;
             }
+            let port = section.cdp_port;
 
             match browser.close_all_tabs(port).await {
                 Ok(count) if count > 0 => tracing::info!(
@@ -418,42 +415,22 @@ fn build_adapters(
 ) -> HashMap<Platform, Arc<dyn PlatformAdapter>> {
     let mut adapters: HashMap<Platform, Arc<dyn PlatformAdapter>> = HashMap::new();
 
-    if config.platforms.xhs.enabled {
+    for platform in Platform::ALL {
+        let section = config.platforms.section_for(platform);
+        if !section.enabled {
+            continue;
+        }
         adapters.insert(
-            Platform::Xhs,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Xhs,
-                config.platforms.xhs.clone(),
-                paths.browser_profiles_dir.join("xhs"),
-                paths.auth_dir.join("xhs.cookies.enc"),
+            platform,
+            Arc::new(MediaPlatformAdapter::new(
+                platform,
+                section.clone(),
+                paths.browser_profiles_dir.join(platform.as_str()),
+                paths
+                    .auth_dir
+                    .join(format!("{}.cookies.enc", platform.as_str())),
                 paths.conf_dir.join("topic_cache.json"),
-            )),
-        );
-    }
-
-    if config.platforms.zhihu.enabled {
-        adapters.insert(
-            Platform::Zhihu,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Zhihu,
-                config.platforms.zhihu.clone(),
-                paths.browser_profiles_dir.join("zhihu"),
-                paths.auth_dir.join("zhihu.cookies.enc"),
-                paths.conf_dir.join("topic_cache.json"),
-            )),
-        );
-    }
-
-    if config.platforms.twitter.enabled {
-        adapters.insert(
-            Platform::Twitter,
-            Arc::new(CdpPlatformAdapter::new(
-                Platform::Twitter,
-                config.platforms.twitter.clone(),
-                paths.browser_profiles_dir.join("twitter"),
-                paths.auth_dir.join("twitter.cookies.enc"),
-                paths.conf_dir.join("topic_cache.json"),
-            )),
+            )) as Arc<dyn PlatformAdapter>,
         );
     }
 

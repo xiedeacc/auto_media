@@ -507,7 +507,7 @@ textarea {
 
 .progress-row {
   display: grid;
-  grid-template-columns: 96px 72px minmax(0, 1fr);
+  grid-template-columns: 96px 72px minmax(0, 1fr) 68px;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -535,6 +535,10 @@ textarea {
 
 .progress-status.failed {
   color: #8c2929;
+}
+
+.retry-button {
+  min-width: 68px;
 }
 
 @media (max-width: 900px) {

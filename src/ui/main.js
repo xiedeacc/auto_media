@@ -133,6 +133,8 @@ function platformLabel(platform) {
   if (platform === "xhs") return "小红书";
   if (platform === "zhihu") return "知乎";
   if (platform === "twitter") return "Twitter/X";
+  if (platform === "xueqiu") return "雪球";
+  if (platform === "douyin") return "抖音";
   return platform || "-";
 }
 
@@ -168,9 +170,20 @@ function renderProgress() {
         <span>${escapeHtml(platformLabel(item.platform))}</span>
         <strong class="progress-status ${escapeHtml(item.status)}">${escapeHtml(progressStatusText(item.status))}</strong>
         <small>${escapeHtml(item.message)}</small>
+        ${
+          item.status === "failed"
+            ? `<button type="button" class="retry-button" data-retry-platform="${escapeHtml(item.platform)}">重试</button>`
+            : ""
+        }
       </div>`,
     )
     .join("");
+
+  els.progressList.querySelectorAll("[data-retry-platform]").forEach((button) => {
+    button.addEventListener("click", () => {
+      retryManualPlatform(button.dataset.retryPlatform);
+    });
+  });
 }
 
 function updateManualProgress(payload) {
@@ -199,6 +212,57 @@ function updateManualProgress(payload) {
     manualProgressItems.push(item);
   }
   renderProgress();
+}
+
+async function retryManualPlatform(platform) {
+  if (busy || !platform) return;
+  if (!manualImages.length) {
+    lastMessage = "请选择至少一张图片";
+    window.alert(lastMessage);
+    return;
+  }
+
+  const index = manualProgressItems.findIndex((item) => item.platform === platform);
+  const item = {
+    platform,
+    status: "publishing",
+    message: `正在重试 ${platformLabel(platform)}`,
+  };
+  if (index >= 0) {
+    manualProgressItems[index] = item;
+  } else {
+    manualProgressItems.push(item);
+  }
+  renderProgress();
+
+  busy = true;
+  els.closeProgress.disabled = true;
+  try {
+    const message = await call("manual_publish", {
+      title: els.manualTitle.value,
+      text: els.manualText.value,
+      tags: els.manualTags.value,
+      imagePaths: manualImages,
+      platforms: [platform],
+    });
+    lastMessage = message;
+    els.progressTitle.textContent = "发送完成";
+    await refresh();
+  } catch (error) {
+    const message = error?.message || String(error);
+    const failedIndex = manualProgressItems.findIndex((item) => item.platform === platform);
+    const failedItem = { platform, status: "failed", message };
+    if (failedIndex >= 0) {
+      manualProgressItems[failedIndex] = failedItem;
+    } else {
+      manualProgressItems.push(failedItem);
+    }
+    renderProgress();
+    showError(error);
+  } finally {
+    busy = false;
+    els.closeProgress.disabled = false;
+  }
 }
 
 function selectedManualPlatforms() {

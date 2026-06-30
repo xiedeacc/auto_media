@@ -1,6 +1,9 @@
+use super::backend::{CookieStore, PublishBackend, PublishContent};
 use crate::{browser::cdp::BrowserCookie, topic_cache};
 use aes::Aes128;
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use cbc::{
     cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit},
@@ -36,6 +39,43 @@ const MAIN_APP_ID: &str = "xhs-pc-web";
 const MAIN_PLATFORM: &str = "Windows";
 const B1_SECRET_KEY: &str = "xhswebmplfbt";
 const HEX_CHARS: &[u8; 16] = b"abcdef0123456789";
+
+/// HTTP API backend for Xiaohongshu. Experimental fallback behind the CDP
+/// backend: relies on reverse-engineered `x-s` signing that may break on changes.
+pub struct XhsApi {
+    cookies: Arc<CookieStore>,
+    topic_cache: PathBuf,
+}
+
+impl XhsApi {
+    pub fn new(cookies: Arc<CookieStore>, topic_cache: PathBuf) -> Self {
+        Self {
+            cookies,
+            topic_cache,
+        }
+    }
+}
+
+#[async_trait]
+impl PublishBackend for XhsApi {
+    async fn publish(&self, content: PublishContent<'_>) -> Result<String> {
+        let cookies = self.cookies.load_or_capture().await?;
+        let message = publish_image_note(
+            &cookies,
+            content.title,
+            content.body,
+            content.image_paths,
+            Some(&self.topic_cache),
+        )
+        .await?;
+        tracing::warn!(
+            image_count = content.image_paths.len(),
+            message = %message,
+            "xhs api article submitted"
+        );
+        Ok(message)
+    }
+}
 
 pub async fn publish_image_note(
     cookies: &[BrowserCookie],

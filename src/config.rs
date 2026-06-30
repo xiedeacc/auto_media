@@ -1,3 +1,4 @@
+use crate::platforms::Platform;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -61,10 +62,12 @@ impl RuntimePaths {
             &self.logs_dir,
             &self.auth_dir,
             &self.browser_profiles_dir,
-            &self.browser_profiles_dir.join("xhs"),
-            &self.browser_profiles_dir.join("zhihu"),
         ] {
             fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        }
+        for platform in Platform::ALL {
+            let dir = self.browser_profiles_dir.join(platform.as_str());
+            fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         }
         Ok(())
     }
@@ -175,6 +178,22 @@ pub struct PlatformSections {
     pub zhihu: PlatformSection,
     #[serde(default = "default_twitter_platform")]
     pub twitter: PlatformSection,
+    #[serde(default = "default_xueqiu_platform")]
+    pub xueqiu: PlatformSection,
+    #[serde(default = "default_douyin_platform")]
+    pub douyin: PlatformSection,
+}
+
+impl PlatformSections {
+    pub fn section_for(&self, platform: Platform) -> &PlatformSection {
+        match platform {
+            Platform::Xhs => &self.xhs,
+            Platform::Zhihu => &self.zhihu,
+            Platform::Twitter => &self.twitter,
+            Platform::Xueqiu => &self.xueqiu,
+            Platform::Douyin => &self.douyin,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +214,30 @@ fn default_twitter_platform() -> PlatformSection {
         creator_url: Some("https://x.com".to_string()),
         write_url: Some("https://x.com/home".to_string()),
         cdp_port: 9225,
+    }
+}
+
+fn default_xueqiu_platform() -> PlatformSection {
+    PlatformSection {
+        enabled: true,
+        mode: "cdp".to_string(),
+        login_url: "https://xueqiu.com".to_string(),
+        creator_url: Some("https://xueqiu.com".to_string()),
+        write_url: Some("https://xueqiu.com".to_string()),
+        cdp_port: 9226,
+    }
+}
+
+fn default_douyin_platform() -> PlatformSection {
+    PlatformSection {
+        enabled: true,
+        mode: "cdp".to_string(),
+        login_url: "https://www.douyin.com".to_string(),
+        creator_url: Some("https://creator.douyin.com".to_string()),
+        write_url: Some(
+            "https://creator.douyin.com/creator-micro/content/upload?default-tab=3".to_string(),
+        ),
+        cdp_port: 9227,
     }
 }
 
@@ -250,6 +293,8 @@ impl Default for AppConfig {
                     "xhs".to_string(),
                     "zhihu".to_string(),
                     "twitter".to_string(),
+                    "xueqiu".to_string(),
+                    "douyin".to_string(),
                 ],
             },
             platforms: PlatformSections {
@@ -277,6 +322,8 @@ impl Default for AppConfig {
                     write_url: Some("https://x.com/home".to_string()),
                     cdp_port: 9225,
                 },
+                xueqiu: default_xueqiu_platform(),
+                douyin: default_douyin_platform(),
             },
             startup: StartupSection {
                 enabled: true,
@@ -306,5 +353,68 @@ pub fn resolve_configured_data_dir(paths: &RuntimePaths, config: &AppConfig) -> 
         data
     } else {
         paths.root.join(data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A legacy config written before Xueqiu/Douyin existed must still parse, with
+    /// the two new platform sections supplied by their serde defaults.
+    #[test]
+    fn legacy_three_platform_config_parses_with_new_platform_defaults() {
+        let legacy = r#"
+[app]
+start_minimized = true
+single_instance = true
+
+[scheduler]
+timezone = "Asia/Shanghai"
+run_immediately_on_start = true
+
+[data]
+dir = "data"
+image_patterns = ["*{YYYYMMDD}*.jpg"]
+multi_image_policy = "newest"
+
+[publish]
+title_pattern = "x"
+fallback_body_text = "x"
+publish_platforms = ["xhs", "zhihu", "twitter"]
+
+[platforms.xhs]
+enabled = true
+mode = "cdp"
+login_url = "https://www.xiaohongshu.com"
+write_url = "https://creator.xiaohongshu.com/publish/publish"
+cdp_port = 9223
+
+[platforms.zhihu]
+enabled = true
+mode = "cdp"
+login_url = "https://www.zhihu.com/signin"
+cdp_port = 9224
+
+[platforms.twitter]
+enabled = true
+mode = "cdp"
+login_url = "https://x.com/i/flow/login"
+cdp_port = 9225
+
+[startup]
+enabled = true
+minimize_to_tray_on_autostart = true
+"#;
+
+        let config: AppConfig = toml::from_str(legacy).expect("legacy config parses");
+        assert_eq!(config.platforms.section_for(Platform::Xueqiu).cdp_port, 9226);
+        assert_eq!(config.platforms.section_for(Platform::Douyin).cdp_port, 9227);
+        assert!(config.platforms.douyin.enabled);
+        // The legacy scheduled platform list is preserved untouched.
+        assert_eq!(
+            config.publish.publish_platforms,
+            vec!["xhs", "zhihu", "twitter"]
+        );
     }
 }

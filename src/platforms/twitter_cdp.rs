@@ -14,9 +14,11 @@ use tokio::time::{sleep, Duration};
 
 /// Stable, locale-proof post buttons, verified live against x.com:
 /// `tweetButtonInline` is the home/inline composer, `tweetButton` the modal one.
+/// The modal's post button is `tweetButton`; prefer it over the inline one.
 const PUBLISH_SELECTORS: &[&str] = &[
-    "[data-testid=\"tweetButtonInline\"]",
+    "[role=\"dialog\"] [data-testid=\"tweetButton\"]",
     "[data-testid=\"tweetButton\"]",
+    "[data-testid=\"tweetButtonInline\"]",
 ];
 /// Text fallbacks if the testids ever change. Includes the Chinese UI's "发帖".
 const PUBLISH_LABELS: &[&str] = &["发帖", "发布", "Post", "Tweet", "推文"];
@@ -57,11 +59,20 @@ impl PublishBackend for TwitterCdp {
 
 #[async_trait]
 impl CdpFlow for TwitterCdp {
+    fn fill_before_upload(&self) -> bool {
+        // Type the text into the fresh modal editor first; attaching the image
+        // first re-renders the composer and the text won't commit.
+        true
+    }
+
     async fn prepare(&self, page: &mut CdpPage) -> Result<()> {
         page.wait_for_truthy("(() => document.readyState !== 'loading')()", "Twitter/X 页面未加载完成")
             .await?;
-        page.evaluate(PREPARE_SCRIPT).await?;
-        Ok(())
+        // Open the compose MODAL via the black 发帖 button. The inline /home composer
+        // rejects programmatic text input; the modal's editor accepts execCommand.
+        let _ = page.click_eval(SIDENAV_POINT_SCRIPT).await;
+        page.wait_for_truthy(MODAL_READY_SCRIPT, "Twitter/X 发帖窗口未打开")
+            .await
     }
 
     async fn upload_images(&self, page: &mut CdpPage, images: &[PathBuf]) -> Result<String> {
@@ -78,14 +89,9 @@ impl CdpFlow for TwitterCdp {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        // A trusted click focuses the DraftJS composer for real, so the execCommand
-        // insert commits to the editor's posted state — a programmatic focus alone
-        // can leave the text visible in the DOM but absent from the sent tweet.
-        if let Ok(Some((x, y))) = page.eval_point(COMPOSER_POINT_SCRIPT).await {
-            let _ = page.click_point(x, y).await;
-            human_pause(300).await;
-        }
+        // In the compose modal, execCommand insertText commits to DraftJS state.
         page.evaluate(&fill_script(&text)).await?;
+        human_pause(400).await;
         Ok("Twitter/X 草稿已填充正文".to_string())
     }
 
@@ -155,29 +161,38 @@ impl TwitterCdp {
     }
 }
 
-const POST_BUTTON_ENABLED_SCRIPT: &str = r#"
+/// Center `{x,y}` of the black sidebar 发帖 button (opens the compose modal).
+const SIDENAV_POINT_SCRIPT: &str = r#"
 (() => {
-  const b = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-  return !!b && b.getAttribute('aria-disabled') !== 'true';
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const b=[...document.querySelectorAll('[data-testid="SideNav_NewTweet_Button"], a[href="/compose/post"], a[href="/compose/tweet"]')].filter(vis)[0];
+  if(!b) return null;
+  b.scrollIntoView({block:'center'});
+  const r=b.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
 })()
 "#;
 
-/// Center `{x,y}` of the visible tweet composer (scrolled into view), for a
-/// trusted click that genuinely focuses the DraftJS editor before filling.
-const COMPOSER_POINT_SCRIPT: &str = r#"
+/// The compose modal is open: a tweet textarea exists inside a dialog.
+const MODAL_READY_SCRIPT: &str = r#"
 (() => {
   const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
-  const el=[...document.querySelectorAll('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]')].filter(vis)[0];
-  if(!el) return null;
-  el.scrollIntoView({block:'center'});
-  const r=el.getBoundingClientRect();
-  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  return [...document.querySelectorAll('[data-testid="tweetTextarea_0"]')].some(t => vis(t) && t.closest('[role="dialog"]'));
+})()
+"#;
+
+const POST_BUTTON_ENABLED_SCRIPT: &str = r#"
+(() => {
+  const b = document.querySelector('[role="dialog"] [data-testid="tweetButton"], [data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
+  return !!b && b.getAttribute('aria-disabled') !== 'true';
 })()
 "#;
 
 const FOCUS_COMPOSER_SCRIPT: &str = r#"
 (() => {
-  const el = document.querySelector('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]');
+  const vis=(el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;};
+  const tas=[...document.querySelectorAll('[data-testid="tweetTextarea_0"]')].filter(vis);
+  const el=tas.find(t=>t.closest('[role="dialog"]'))||tas[0];
   if (el) { el.focus(); return true; }
   return false;
 })()
@@ -185,32 +200,11 @@ const FOCUS_COMPOSER_SCRIPT: &str = r#"
 
 const COMPOSER_EMPTY_SCRIPT: &str = r#"
 (() => {
-  const el = document.querySelector('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]');
+  const vis=(el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;};
+  const tas=[...document.querySelectorAll('[data-testid="tweetTextarea_0"]')].filter(vis);
+  const el=tas.find(t=>t.closest('[role="dialog"]'))||tas[0];
   if (!el) return true;
   return (el.innerText || el.textContent || '').trim().length === 0;
-})()
-"#;
-
-const PREPARE_SCRIPT: &str = r#"
-(() => {
-  const visible = (el) => {
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-  };
-  const clickByText = (texts) => {
-    for (const el of Array.from(document.querySelectorAll('button, [role=button], div, span, a'))) {
-      const text = (el.innerText || el.textContent || '').trim();
-      if (visible(el) && texts.some(t => text.includes(t))) { el.click(); return text; }
-    }
-    return null;
-  };
-  if (!document.querySelector('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"], [contenteditable="true"]')) {
-    const compose = document.querySelector('[data-testid="SideNav_NewTweet_Button"], a[href="/compose/post"], a[href="/compose/tweet"]');
-    if (compose) compose.click();
-    else clickByText(['Post', 'Tweet', '发布', '发帖']);
-  }
-  return true;
 })()
 "#;
 
@@ -246,8 +240,9 @@ fn fill_script(text: &str) -> String {
     el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: value }}));
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
   }};
-  const bodyEl = Array.from(document.querySelectorAll('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"], [contenteditable="true"]'))
-    .filter(visible)[0];
+  const tas = Array.from(document.querySelectorAll('[data-testid="tweetTextarea_0"]')).filter(visible);
+  const bodyEl = tas.find(t => t.closest('[role="dialog"]')) || tas[0]
+    || Array.from(document.querySelectorAll('[role="textbox"][contenteditable="true"]')).filter(visible)[0];
   if (bodyEl) setText(bodyEl, text);
   return {{ message: `Twitter/X 草稿已填充：正文${{bodyEl ? '成功' : '未找到'}}。` }};
 }})()

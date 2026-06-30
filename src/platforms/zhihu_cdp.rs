@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::time::{sleep, Duration};
 
 /// Zhihu articles accept at most 3 topics.
 const MAX_TOPICS: usize = 3;
@@ -32,33 +31,7 @@ impl ZhihuCdp {
         }
     }
 
-    async fn click_publish_inner(&self, page: &mut CdpPage, topics: &[String]) -> Result<String> {
-        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post). It
-        // navigates write → /p/<id>/edit but the same CDP session survives it.
-        if !page.click_eval(MAIN_PUBLISH_SCRIPT).await? {
-            anyhow::bail!("没有找到知乎发布按钮");
-        }
-        let _ = page.pump_dialogs(1500).await;
-        let _ = page
-            .wait_for_truthy(PANEL_READY_SCRIPT, "知乎发布设置面板未出现")
-            .await;
-        human_pause(600).await;
-
-        // Select topics in the panel BEFORE the final publish.
-        let added = self.add_topics(page, topics).await;
-
-        // The panel's 发布 saves + publishes + navigates cleanly to the article.
-        for _ in 0..20 {
-            if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await.unwrap_or(false) {
-                let _ = page.pump_dialogs(4000).await;
-                return Ok(format!("已设置 {added} 个话题并点击知乎发布按钮"));
-            }
-            sleep(Duration::from_millis(250)).await;
-        }
-        Ok(format!("已设置 {added} 个话题并点击底部发布，未发现二次确认弹窗"))
-    }
-
-    /// Add each tag as a real Zhihu topic via the 发布设置 panel: open the topic
+    /// Add each tag as a real Zhihu topic via the 文章话题 section: open the topic
     /// search, type the keyword, and click the exact-match suggestion. Resolved
     /// keyword→topic titles are cached so repeats select the same topic.
     async fn add_topics(&self, page: &mut CdpPage, keywords: &[String]) -> usize {
@@ -178,12 +151,25 @@ impl CdpFlow for ZhihuCdp {
         page: &mut CdpPage,
         content: PublishContent<'_>,
     ) -> Result<String> {
-        page.set_accept_beforeunload(true);
-        let result = self
-            .click_publish_inner(page, &content.topic_keywords())
+        // Zhihu topics live in the 「文章话题」 section at the bottom of the edit page
+        // and must be selected BEFORE 发布 — a single 发布 click then publishes the
+        // article directly. The draft auto-saves to /p/<id>/edit while typing, which
+        // is where that section (the 添加话题 button) appears.
+        let _ = page
+            .wait_for_truthy(PANEL_READY_SCRIPT, "知乎文章话题区未出现")
             .await;
+        human_pause(600).await;
+        let added = self.add_topics(page, &content.topic_keywords()).await;
+        human_pause(500).await;
+
+        page.set_accept_beforeunload(true);
+        let clicked = page.click_eval(MAIN_PUBLISH_SCRIPT).await;
+        let _ = page.pump_dialogs(4000).await;
         page.set_accept_beforeunload(false);
-        result
+        match clicked {
+            Ok(true) => Ok(format!("已设置 {added} 个话题并发布")),
+            _ => anyhow::bail!("没有找到知乎发布按钮"),
+        }
     }
 }
 
@@ -298,38 +284,6 @@ const MAIN_PUBLISH_SCRIPT: &str = r#"
 })()
 "#;
 
-const CONFIRM_PUBLISH_SCRIPT: &str = r#"
-(() => {
-  const visible = (el) => {
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    return rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0 && style.visibility !== 'hidden' && style.display !== 'none';
-  };
-  const disabled = (el) => {
-    const aria = el.getAttribute('aria-disabled');
-    const cls = String(el.className || '').toLowerCase();
-    return el.disabled || aria === 'true' || cls.includes('disabled');
-  };
-  const roots = Array.from(document.querySelectorAll('[role=dialog], .Modal, .Dialog, .modal, .popover'))
-    .filter(visible);
-  const searchRoots = roots.length ? roots : [document.body];
-  const candidates = searchRoots.flatMap(root => Array.from(root.querySelectorAll('button, [role=button]')))
-    .filter(visible)
-    .filter(el => !disabled(el))
-    .map(el => {
-      const label = (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
-      const rect = el.getBoundingClientRect();
-      return { el, label, cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, area: rect.width * rect.height };
-    })
-    .filter(item => ['发布', '确认发布', '发布文章'].includes(item.label) && item.area >= 500 && item.area <= 20000)
-    .sort((a, b) => b.cy - a.cy || b.cx - a.cx || a.area - b.area);
-  const top = candidates[0];
-  if (!top) return null;
-  top.el.scrollIntoView({ block: 'center' });
-  const rect = top.el.getBoundingClientRect();
-  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-})()
-"#;
 
 fn fill_script(title: &str, body: &str) -> String {
     let title = serde_json::to_string(title).unwrap_or_else(|_| "\"\"".to_string());

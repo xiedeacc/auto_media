@@ -38,6 +38,17 @@ fn keystroke_delay() -> u64 {
     }
 }
 
+/// Detects a visible manual-verification prompt (SMS code / captcha / slider /
+/// scan-login) on the page, so a publish run can pause instead of auto-closing.
+const INTERVENTION_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const phrases=['短信验证码','安全验证','人机验证','拖动滑块','滑块验证','向右滑动','扫码登录','完成验证','验证身份','请输入验证码','captcha'];
+  const els=[...document.querySelectorAll('div,span,p,h1,h2,h3,label,button')].filter(vis);
+  return els.some(e=>{const t=(e.innerText||'').trim();return t.length>0&&t.length<60&&phrases.some(p=>t.includes(p));});
+})()
+"#;
+
 /// Default ordered candidate selectors for locating an image file input.
 /// Per-platform flows can pass their own list to [`CdpPage::set_file_input`].
 pub const DEFAULT_FILE_INPUT_SELECTORS: &[&str] = &[
@@ -143,6 +154,40 @@ impl CdpBrowser {
         page.call("Page.enable", json!({})).await?;
         page.call("Page.bringToFront", json!({})).await?;
         Ok(page)
+    }
+
+    /// Returns true if any open tab is showing a manual-intervention UI — SMS code,
+    /// captcha, slider, or scan-login verification — so the post-publish auto-close
+    /// can keep the window open for the user to finish.
+    pub async fn has_pending_intervention(&self, port: u16) -> bool {
+        let url = format!("http://127.0.0.1:{port}/json");
+        let targets = match http_client().get(url).send().await {
+            Ok(response) if response.status().is_success() => {
+                response.json::<Vec<TargetInfo>>().await.unwrap_or_default()
+            }
+            _ => return false,
+        };
+        for target in targets.into_iter().filter(|t| t.target_type == "page") {
+            let Some(ws) = target.web_socket_debugger_url else {
+                continue;
+            };
+            let Ok(mut page) = CdpPage::connect(&ws).await else {
+                continue;
+            };
+            // Guard against a tab stuck on a native dialog (evaluate would hang).
+            if let Ok(Ok(value)) =
+                timeout(Duration::from_secs(3), page.evaluate(INTERVENTION_SCRIPT)).await
+            {
+                if value
+                    .pointer("/result/value")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub async fn get_cookies(&self, launch: &BrowserLaunch) -> Result<Vec<BrowserCookie>> {

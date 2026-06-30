@@ -261,8 +261,12 @@ impl AppController {
             reports.push((platform, format!("{platform}: {message}")));
         }
 
-        // Publishing done — close the shared browser window/process.
-        self.close_browser_tabs().await;
+        // Publishing done — close the shared browser, unless a tab needs the user
+        // to finish a verification (SMS/captcha), in which case keep it open.
+        let kept_open = !self.finish_browser_after_publish().await;
+        if kept_open {
+            messages.push("⚠ 检测到平台需要人工验证（如短信验证码），已保留浏览器窗口，请在窗口中完成验证后手动关闭".to_string());
+        }
 
         reports.sort_by_key(|(platform, _)| {
             platform_names
@@ -328,6 +332,19 @@ impl AppController {
             Ok(()) => tracing::info!(port, "closed shared browser"),
             Err(error) => tracing::warn!(port, error = %error, "failed to close shared browser"),
         }
+    }
+
+    /// Close the shared browser after a publish — unless a tab is showing a
+    /// verification the user must complete (SMS/captcha/scan), in which case keep
+    /// the window open so they can finish it. Returns whether it was closed.
+    pub async fn finish_browser_after_publish(&self) -> bool {
+        let port = crate::config::SHARED_CDP_PORT;
+        if CdpBrowser.has_pending_intervention(port).await {
+            tracing::warn!(port, "verification prompt detected; keeping browser open");
+            return false;
+        }
+        self.close_browser_tabs().await;
+        true
     }
 }
 

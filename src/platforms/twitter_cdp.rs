@@ -80,29 +80,90 @@ impl CdpFlow for TwitterCdp {
         Ok("Twitter/X 草稿已填充正文".to_string())
     }
 
+    async fn wait_publish_ready(&self, page: &mut CdpPage) -> Result<()> {
+        // The post button stays aria-disabled until the composed text commits to
+        // React state; wait for it to enable so the click/shortcut actually posts.
+        let _ = page
+            .wait_for_truthy(POST_BUTTON_ENABLED_SCRIPT, "发帖按钮未就绪")
+            .await;
+        Ok(())
+    }
+
     async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
-        // The post button stays aria-disabled until the text commits, so retry a
-        // few times. Prefer the stable testid, fall back to localized labels.
+        // Ctrl+Enter is X's native send shortcut and the most reliable trigger:
+        // focus the composer, fire it, and verify the composer cleared (= posted).
+        page.evaluate(FOCUS_COMPOSER_SCRIPT).await?;
+        sleep(Duration::from_millis(200)).await;
+        page.press_ctrl_enter().await?;
+        page.drain_dialog_events().await?;
+        sleep(Duration::from_secs(2)).await;
+        if self.composer_empty(page).await {
+            return Ok("已通过 Ctrl+Enter 发布推文".to_string());
+        }
+
+        // Fall back to clicking the post button (stable testid, then localized text).
         for _ in 0..10 {
             for selector in PUBLISH_SELECTORS {
                 if page.click_eval(&selector_center_script(selector)).await? {
                     page.drain_dialog_events().await?;
                     sleep(Duration::from_secs(2)).await;
-                    return Ok(format!("已自动点击发帖按钮 ({selector})"));
+                    if self.composer_empty(page).await {
+                        return Ok(format!("已自动点击发帖按钮 ({selector})"));
+                    }
                 }
             }
             for label in PUBLISH_LABELS {
                 if page.click_eval(&label_center_script(label)).await? {
                     page.drain_dialog_events().await?;
                     sleep(Duration::from_secs(2)).await;
-                    return Ok(format!("已自动点击发布按钮：{label}"));
+                    if self.composer_empty(page).await {
+                        return Ok(format!("已自动点击发布按钮：{label}"));
+                    }
                 }
             }
             sleep(Duration::from_millis(500)).await;
         }
-        anyhow::bail!("没有找到可点击的发布按钮")
+        anyhow::bail!("发帖按钮点击后推文仍未发送，请手动确认")
     }
 }
+
+impl TwitterCdp {
+    /// `true` once the composer has emptied — the signal that the tweet posted.
+    async fn composer_empty(&self, page: &mut CdpPage) -> bool {
+        page.evaluate(COMPOSER_EMPTY_SCRIPT)
+            .await
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/result/value")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(false)
+    }
+}
+
+const POST_BUTTON_ENABLED_SCRIPT: &str = r#"
+(() => {
+  const b = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+  return !!b && b.getAttribute('aria-disabled') !== 'true';
+})()
+"#;
+
+const FOCUS_COMPOSER_SCRIPT: &str = r#"
+(() => {
+  const el = document.querySelector('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]');
+  if (el) { el.focus(); return true; }
+  return false;
+})()
+"#;
+
+const COMPOSER_EMPTY_SCRIPT: &str = r#"
+(() => {
+  const el = document.querySelector('[data-testid="tweetTextarea_0"], [role="textbox"][contenteditable="true"]');
+  if (!el) return true;
+  return (el.innerText || el.textContent || '').trim().length === 0;
+})()
+"#;
 
 const PREPARE_SCRIPT: &str = r#"
 (() => {

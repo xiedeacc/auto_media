@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Auto Media</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=8" />
   </head>
   <body>
     <main class="shell">
@@ -19,58 +19,57 @@
         </div>
       </header>
 
-      <section class="status-grid">
-        <article class="panel">
-          <span class="label">开机自启动</span>
-          <label class="switch">
-            <input id="autostart" type="checkbox" />
-            <span></span>
-          </label>
-          <small>当前用户启动项</small>
-        </article>
-      </section>
-
       <section class="workspace">
         <div class="platforms">
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">小红书</span>
-              <button class="mode-toggle" data-mode-platform="xhs" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="xhs">检测中</small>
             </div>
-            <button data-login="xhs" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="xhs" type="button">CDP</button>
+              <button data-login="xhs" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">知乎</span>
-              <button class="mode-toggle" data-mode-platform="zhihu" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="zhihu">检测中</small>
             </div>
-            <button data-login="zhihu" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="zhihu" type="button">CDP</button>
+              <button data-login="zhihu" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">Twitter/X</span>
-              <button class="mode-toggle" data-mode-platform="twitter" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="twitter">检测中</small>
             </div>
-            <button data-login="twitter" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="twitter" type="button">CDP</button>
+              <button data-login="twitter" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">雪球</span>
-              <button class="mode-toggle" data-mode-platform="xueqiu" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="xueqiu">检测中</small>
             </div>
-            <button data-login="xueqiu" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="xueqiu" type="button">CDP</button>
+              <button data-login="xueqiu" type="button">登录</button>
+            </div>
           </article>
           <article class="platform">
-            <div>
+            <div class="platform-info">
               <span class="label">抖音</span>
-              <button class="mode-toggle" data-mode-platform="douyin" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="douyin">检测中</small>
             </div>
-            <button data-login="douyin" type="button">登录</button>
+            <div class="platform-actions">
+              <button class="mode-toggle" data-mode-platform="douyin" type="button">CDP</button>
+              <button data-login="douyin" type="button">登录</button>
+            </div>
           </article>
         </div>
 
@@ -105,6 +104,12 @@
         </div>
       </section>
     </main>
+
+    <footer class="statusbar">
+      <button id="settings-button" class="statusbar-icon" type="button" title="配置" aria-label="配置">⚙</button>
+      <span id="statusbar-text" class="statusbar-text">就绪</span>
+      <span id="statusbar-build" class="statusbar-build"></span>
+    </footer>
 
     <div id="manual-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-backdrop" data-close-manual></div>
@@ -175,6 +180,24 @@
         </footer>
       </section>
     </div>
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" data-close-settings></div>
+      <section class="modal-panel settings-panel">
+        <header class="modal-head">
+          <h2>配置</h2>
+          <button class="icon-button" data-close-settings type="button">×</button>
+        </header>
+        <div class="settings-body">
+          <div class="settings-row">
+            <span class="label">开机自启动</span>
+            <label class="switch">
+              <input id="autostart" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+        </div>
+      </section>
+    </div>
     <div id="logs-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-backdrop" data-close-logs></div>
       <section class="modal-panel logs-panel">
@@ -208,6 +231,6 @@
         <div id="progress-list" class="progress-list"></div>
       </section>
     </div>
-    <script src="./main.js"></script>
+    <script src="./main.js?v=8"></script>
   </body>
 </html>

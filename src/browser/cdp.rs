@@ -364,6 +364,26 @@ impl CdpPage {
         Ok(())
     }
 
+    /// Dispatch a Ctrl+Enter key chord — the universal "send" shortcut for most
+    /// composers (Twitter/X, many editors). The composer must already be focused.
+    pub async fn press_ctrl_enter(&mut self) -> Result<()> {
+        for kind in ["keyDown", "keyUp"] {
+            self.call(
+                "Input.dispatchKeyEvent",
+                json!({
+                    "type": kind,
+                    "modifiers": 2,
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13,
+                }),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Attach `image_paths` to the first file input matching any selector in
     /// `selectors` (tried in order). Pass [`DEFAULT_FILE_INPUT_SELECTORS`] for the
     /// generic image-input heuristic.

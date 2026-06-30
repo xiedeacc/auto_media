@@ -9,6 +9,10 @@ const els = {
   autostart: document.querySelector("#autostart"),
   records: document.querySelector("#records"),
   manualModal: document.querySelector("#manual-modal"),
+  settingsButton: document.querySelector("#settings-button"),
+  settingsModal: document.querySelector("#settings-modal"),
+  statusbarText: document.querySelector("#statusbar-text"),
+  statusbarBuild: document.querySelector("#statusbar-build"),
   logsModal: document.querySelector("#logs-modal"),
   imagePreviewModal: document.querySelector("#image-preview-modal"),
   progressModal: document.querySelector("#progress-modal"),
@@ -59,6 +63,10 @@ async function refresh() {
     const status = data.status;
     lastMessage = status.last_message || "";
     els.message.textContent = "";
+    els.statusbarText.textContent = "就绪";
+    if (data.build_commit) {
+      els.statusbarBuild.textContent = `${data.build_commit} · ${data.build_time || ""}`.trim();
+    }
     els.autostart.checked = Boolean(data.autostart_enabled);
     defaultTags = data.publish_tags || [];
     publishTitlePattern = data.publish_title_pattern || "";
@@ -110,6 +118,14 @@ async function openLogsModal() {
 
 function closeLogsModal() {
   els.logsModal.classList.add("hidden");
+}
+
+function openSettingsModal() {
+  els.settingsModal.classList.remove("hidden");
+}
+
+function closeSettingsModal() {
+  els.settingsModal.classList.add("hidden");
 }
 
 function closeImagePreview() {
@@ -312,22 +328,11 @@ function renderManualImages() {
   els.imageList.innerHTML = manualImages
     .map(
       (path, index) => `<div class="image-row" role="button" tabindex="0" data-preview-image="${index}">
-        <img class="image-thumb" data-thumb="${index}" alt="" />
         <span title="${escapeHtml(path)}">${escapeHtml(path)}</span>
         <button type="button" data-remove-image="${index}">移除</button>
       </div>`,
     )
     .join("");
-
-  els.imageList.querySelectorAll("[data-thumb]").forEach((img) => {
-    const path = manualImages[Number(img.dataset.thumb)];
-    if (!path) return;
-    call("read_image_preview", { path })
-      .then((src) => {
-        img.src = src;
-      })
-      .catch(() => {});
-  });
 
   els.imageList.querySelectorAll("[data-remove-image]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -475,6 +480,7 @@ function escapeHtml(value) {
 
 els.manualPost.addEventListener("click", openManualModal);
 els.logsButton.addEventListener("click", openLogsModal);
+els.settingsButton.addEventListener("click", openSettingsModal);
 els.closeProgress.addEventListener("click", closeProgressModal);
 
 els.clearRecords.addEventListener("click", async () => {
@@ -500,6 +506,10 @@ document.querySelectorAll("[data-close-manual]").forEach((node) => {
 
 document.querySelectorAll("[data-close-logs]").forEach((node) => {
   node.addEventListener("click", closeLogsModal);
+});
+
+document.querySelectorAll("[data-close-settings]").forEach((node) => {
+  node.addEventListener("click", closeSettingsModal);
 });
 
 document.querySelectorAll("[data-close-preview]").forEach((node) => {

@@ -22,6 +22,15 @@ Write-Host "[1/3] Stopping running auto_media.exe ..."
 Get-Process -Name auto_media -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 300
 
+# WebView2 caches the embedded UI (styles.css / main.js) aggressively and keys on
+# the asset URL, so a rebuilt frontend can otherwise render with stale CSS/JS.
+# Drop the WebView2 HTTP/code cache so UI edits always take effect on relaunch.
+$webview = "$env:LOCALAPPDATA\local.auto-media\EBWebView\Default"
+if (Test-Path $webview) {
+  Remove-Item -Recurse -Force "$webview\Cache" -ErrorAction SilentlyContinue
+  Remove-Item -Recurse -Force "$webview\Code Cache" -ErrorAction SilentlyContinue
+}
+
 Write-Host "[2/3] Building (incremental) ..."
 if ($Release) { cargo build --release } else { cargo build }
 if ($LASTEXITCODE -ne 0) { Write-Error "cargo build failed (exit $LASTEXITCODE)"; exit 1 }

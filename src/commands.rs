@@ -17,7 +17,9 @@ pub async fn get_status(
         "paths": state.controller.path_summary(),
         "publish_tags": state.controller.publish_tags(),
         "publish_title_pattern": state.controller.publish_title_pattern(),
-        "autostart_enabled": autostart
+        "autostart_enabled": autostart,
+        "build_commit": env!("GIT_HASH"),
+        "build_time": env!("BUILD_TIME")
     });
     Ok(payload)
 }

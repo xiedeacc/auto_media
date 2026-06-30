@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
-/// Zhihu articles accept only a handful of topics; cap how many we try to set.
-const MAX_TOPICS: usize = 5;
+/// Zhihu articles accept at most 3 topics.
+const MAX_TOPICS: usize = 3;
 
 pub struct ZhihuCdp {
     browser: CdpBrowser,

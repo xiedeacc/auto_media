@@ -72,8 +72,23 @@ pub async fn save_pasted_image(
 }
 
 #[tauri::command]
-pub async fn read_image_preview(path: String) -> Result<String, String> {
-    let path = std::path::PathBuf::from(path);
+pub async fn read_image_preview(
+    state: State<'_, SharedState>,
+    path: String,
+    platform: Option<String>,
+) -> Result<String, String> {
+    let mut path = std::path::PathBuf::from(path);
+    // Preview the image as it will be published: stamped with the first selected
+    // platform's watermark. Falls back to the original on any watermark failure.
+    if let Some(platform) = platform.filter(|name| !name.is_empty()) {
+        let platform = platform
+            .parse::<Platform>()
+            .map_err(|error| error.to_string())?;
+        match state.controller.watermark_preview(&path, platform) {
+            Ok(watermarked) => path = watermarked,
+            Err(error) => tracing::warn!(error = %error, "watermark preview failed; showing original"),
+        }
+    }
     let mime = mime_guess::from_path(&path)
         .first_or_octet_stream()
         .essence_str()

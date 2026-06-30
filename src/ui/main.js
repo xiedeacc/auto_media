@@ -391,14 +391,26 @@ function renderManualImages() {
   });
 }
 
+function firstSelectedPlatform() {
+  for (const checkbox of els.manualPlatforms) {
+    if (checkbox.checked) return checkbox.value;
+  }
+  return null;
+}
+
 async function previewManualImage(index) {
   const path = manualImages[index];
   if (!path) return;
+  const platform = firstSelectedPlatform();
+  const wm = watermarks.find((item) => item.platform === platform);
+  const watermarked = platform && wm && wm.enabled && (wm.text || "").trim();
   els.imagePreviewModal.classList.remove("hidden");
-  els.previewCaption.textContent = path;
+  els.previewCaption.textContent = watermarked
+    ? `${path}　·　${platformLabel(platform)}水印预览`
+    : path;
   els.previewImage.removeAttribute("src");
   try {
-    els.previewImage.src = await call("read_image_preview", { path });
+    els.previewImage.src = await call("read_image_preview", { path, platform });
   } catch (error) {
     closeImagePreview();
     showError(error);

@@ -325,6 +325,26 @@ impl AppController {
         crate::config::update_platform_watermark(&self.paths, platform, enabled, &text)
     }
 
+    /// Return a path to `src` stamped with `platform`'s current watermark (using
+    /// the live adapter settings). If that platform has watermarking off or no
+    /// text, the original path is returned unchanged.
+    pub fn watermark_preview(
+        &self,
+        src: &std::path::Path,
+        platform: Platform,
+    ) -> Result<std::path::PathBuf> {
+        let Some(adapter) = self.adapters.get(&platform) else {
+            return Ok(src.to_path_buf());
+        };
+        let text = adapter.watermark_text();
+        let text = text.trim();
+        if !adapter.watermark_enabled() || text.is_empty() {
+            return Ok(src.to_path_buf());
+        }
+        let out_dir = std::env::temp_dir().join("auto_media_watermark_preview");
+        crate::watermark::apply(src, &out_dir, &format!("preview_{}", platform.as_str()), text)
+    }
+
     pub fn path_summary(&self) -> PathSummary {
         PathSummary {
             root: self.paths.root.display().to_string(),

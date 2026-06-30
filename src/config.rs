@@ -220,10 +220,13 @@ pub struct PlatformSection {
     pub write_url: Option<String>,
     pub creator_url: Option<String>,
     pub cdp_port: u16,
-    /// Text stamped onto images before upload. Absent → use the platform's
-    /// built-in default; present-but-empty → watermarking disabled for it.
+    /// Text stamped onto images before upload. Absent/empty → the platform's
+    /// built-in default text is used.
     #[serde(default)]
     pub watermark: Option<String>,
+    /// Whether to stamp the watermark. Absent → on by default.
+    #[serde(default)]
+    pub watermark_enabled: Option<bool>,
 }
 
 fn default_twitter_platform() -> PlatformSection {
@@ -235,6 +238,7 @@ fn default_twitter_platform() -> PlatformSection {
         write_url: Some("https://x.com/home".to_string()),
         cdp_port: 9225,
         watermark: Some("https://blog.xiedeacc.com".to_string()),
+        watermark_enabled: Some(true),
     }
 }
 
@@ -247,6 +251,7 @@ fn default_xueqiu_platform() -> PlatformSection {
         write_url: Some("https://xueqiu.com".to_string()),
         cdp_port: 9226,
         watermark: Some("https://blog.xiedeacc.com".to_string()),
+        watermark_enabled: Some(true),
     }
 }
 
@@ -261,6 +266,7 @@ fn default_douyin_platform() -> PlatformSection {
         ),
         cdp_port: 9227,
         watermark: Some("xiedeacc".to_string()),
+        watermark_enabled: Some(true),
     }
 }
 
@@ -329,6 +335,7 @@ impl Default for AppConfig {
                     write_url: Some("https://creator.xiaohongshu.com/publish/publish".to_string()),
                     cdp_port: 9223,
                     watermark: Some("xiedeacc".to_string()),
+                    watermark_enabled: Some(true),
                 },
                 zhihu: PlatformSection {
                     enabled: true,
@@ -338,6 +345,7 @@ impl Default for AppConfig {
                     write_url: Some("https://zhuanlan.zhihu.com/write".to_string()),
                     cdp_port: 9224,
                     watermark: Some("https://blog.xiedeacc.com".to_string()),
+                    watermark_enabled: Some(true),
                 },
                 twitter: PlatformSection {
                     enabled: true,
@@ -347,6 +355,7 @@ impl Default for AppConfig {
                     write_url: Some("https://x.com/home".to_string()),
                     cdp_port: 9225,
                     watermark: Some("https://blog.xiedeacc.com".to_string()),
+                    watermark_enabled: Some(true),
                 },
                 xueqiu: default_xueqiu_platform(),
                 douyin: default_douyin_platform(),
@@ -378,6 +387,23 @@ pub fn load_or_create(paths: &RuntimePaths) -> Result<AppConfig> {
 pub fn update_platform_mode(paths: &RuntimePaths, platform: Platform, mode: &str) -> Result<()> {
     let mut config = load_or_create(paths)?;
     config.platforms.section_for_mut(platform).mode = mode.to_string();
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
+}
+
+/// Persist a single platform's watermark setting (on/off + text), preserving all
+/// other current on-disk settings.
+pub fn update_platform_watermark(
+    paths: &RuntimePaths,
+    platform: Platform,
+    enabled: bool,
+    text: &str,
+) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    let section = config.platforms.section_for_mut(platform);
+    section.watermark = Some(text.to_string());
+    section.watermark_enabled = Some(enabled);
     let text = toml::to_string_pretty(&config).context("serialize config")?;
     fs::write(&paths.config_file, text)
         .with_context(|| format!("write {}", paths.config_file.display()))

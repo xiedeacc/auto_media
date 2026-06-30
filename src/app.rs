@@ -297,6 +297,34 @@ impl AppController {
         crate::config::update_platform_mode(&self.paths, platform, mode)
     }
 
+    /// Per-platform watermark settings for the UI: `{ platform, enabled, text }`.
+    pub fn watermark_settings(&self) -> Vec<serde_json::Value> {
+        Platform::ALL
+            .iter()
+            .filter_map(|platform| {
+                self.adapters.get(platform).map(|adapter| {
+                    serde_json::json!({
+                        "platform": platform.as_str(),
+                        "enabled": adapter.watermark_enabled(),
+                        "text": adapter.watermark_text(),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    pub fn set_platform_watermark(
+        &self,
+        platform: Platform,
+        enabled: bool,
+        text: String,
+    ) -> Result<()> {
+        if let Some(adapter) = self.adapters.get(&platform) {
+            adapter.set_watermark(enabled, text.clone());
+        }
+        crate::config::update_platform_watermark(&self.paths, platform, enabled, &text)
+    }
+
     pub fn path_summary(&self) -> PathSummary {
         PathSummary {
             root: self.paths.root.display().to_string(),
@@ -395,6 +423,7 @@ pub fn run() -> Result<()> {
             commands::set_paused,
             commands::login_platform,
             commands::set_platform_mode,
+            commands::set_platform_watermark,
             commands::set_autostart,
             commands::open_dir,
         ])

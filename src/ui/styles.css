@@ -299,6 +299,62 @@ h2 {
   padding: 10px 0;
 }
 
+.settings-section {
+  padding: 12px 0 4px;
+  border-top: 1px solid #e6ebf1;
+  margin-top: 6px;
+}
+
+.settings-section-head {
+  margin-bottom: 8px;
+}
+
+.settings-section-head .hint {
+  display: block;
+  margin-top: 4px;
+  color: #8a98a8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.watermark-list {
+  display: grid;
+  gap: 8px;
+}
+
+.watermark-row {
+  display: grid;
+  grid-template-columns: auto 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.watermark-row .switch {
+  margin-top: 0;
+}
+
+.watermark-row .wm-name {
+  color: #33475b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.watermark-row .wm-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid #d4dde6;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1f2d3d;
+  background: #fff;
+}
+
+.watermark-row .wm-text:focus {
+  outline: none;
+  border-color: #2f855a;
+}
+
 .settings-row small {
   display: block;
   margin-top: 4px;

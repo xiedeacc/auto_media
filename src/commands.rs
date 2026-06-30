@@ -17,6 +17,7 @@ pub async fn get_status(
         "paths": state.controller.path_summary(),
         "publish_tags": state.controller.publish_tags(),
         "publish_title_pattern": state.controller.publish_title_pattern(),
+        "watermarks": state.controller.watermark_settings(),
         "autostart_enabled": autostart,
         "build_commit": env!("GIT_HASH"),
         "build_time": env!("BUILD_TIME")
@@ -215,6 +216,22 @@ pub async fn set_platform_mode(
     state
         .controller
         .set_platform_mode(platform, prefer_cdp)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_platform_watermark(
+    state: State<'_, SharedState>,
+    platform: String,
+    enabled: bool,
+    text: String,
+) -> Result<(), String> {
+    let platform = platform
+        .parse::<Platform>()
+        .map_err(|error| error.to_string())?;
+    state
+        .controller
+        .set_platform_watermark(platform, enabled, text)
         .map_err(|error| error.to_string())
 }
 

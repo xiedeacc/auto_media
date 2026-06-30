@@ -11,6 +11,7 @@ const els = {
   manualModal: document.querySelector("#manual-modal"),
   settingsButton: document.querySelector("#settings-button"),
   settingsModal: document.querySelector("#settings-modal"),
+  watermarkList: document.querySelector("#watermark-list"),
   statusbarText: document.querySelector("#statusbar-text"),
   statusbarBuild: document.querySelector("#statusbar-build"),
   logsModal: document.querySelector("#logs-modal"),
@@ -45,6 +46,7 @@ let publishTitlePattern = "";
 let lastTradeTitle = "";
 let lastTradeTags = "";
 let manualProgressItems = [];
+let watermarks = [];
 
 function fmt(value) {
   if (!value) return "-";
@@ -68,6 +70,7 @@ async function refresh() {
       els.statusbarBuild.textContent = `${data.build_commit} · ${data.build_time || ""}`.trim();
     }
     els.autostart.checked = Boolean(data.autostart_enabled);
+    watermarks = data.watermarks || [];
     defaultTags = data.publish_tags || [];
     publishTitlePattern = data.publish_title_pattern || "";
     if (!els.manualModal.classList.contains("hidden")) {
@@ -121,7 +124,40 @@ function closeLogsModal() {
 }
 
 function openSettingsModal() {
+  renderWatermarks();
   els.settingsModal.classList.remove("hidden");
+}
+
+function renderWatermarks() {
+  if (!els.watermarkList) return;
+  els.watermarkList.innerHTML = watermarks
+    .map(
+      (item) => `<div class="watermark-row" data-platform="${escapeHtml(item.platform)}">
+        <label class="switch">
+          <input type="checkbox" data-wm-enabled ${item.enabled ? "checked" : ""} />
+          <span></span>
+        </label>
+        <span class="wm-name">${escapeHtml(platformLabel(item.platform))}</span>
+        <input type="text" class="wm-text" data-wm-text value="${escapeHtml(item.text || "")}" placeholder="水印文本" />
+      </div>`
+    )
+    .join("");
+}
+
+async function saveWatermarkRow(row) {
+  const platform = row.dataset.platform;
+  const enabled = row.querySelector("[data-wm-enabled]").checked;
+  const text = row.querySelector("[data-wm-text]").value.trim();
+  const entry = watermarks.find((item) => item.platform === platform);
+  if (entry) {
+    entry.enabled = enabled;
+    entry.text = text;
+  }
+  try {
+    await call("set_platform_watermark", { platform, enabled, text });
+  } catch (error) {
+    showError(error);
+  }
 }
 
 function closeSettingsModal() {
@@ -607,6 +643,14 @@ els.autostart.addEventListener("change", async () => {
     els.autostart.checked = !els.autostart.checked;
   }
 });
+
+if (els.watermarkList) {
+  // 'change' fires on checkbox toggle and on text input blur/enter — both bubble.
+  els.watermarkList.addEventListener("change", (event) => {
+    const row = event.target.closest(".watermark-row");
+    if (row) saveWatermarkRow(row);
+  });
+}
 
 els.loginButtons.forEach((button) => {
   button.addEventListener("click", async () => {

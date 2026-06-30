@@ -160,6 +160,12 @@ pub trait PlatformAdapter: Send + Sync {
     fn prefer_cdp(&self) -> bool;
     /// Switch the preferred backend at runtime.
     fn set_prefer_cdp(&self, prefer: bool);
+    /// Whether image watermarking is on for this platform.
+    fn watermark_enabled(&self) -> bool;
+    /// The watermark text (retained even while disabled, so toggling preserves it).
+    fn watermark_text(&self) -> String;
+    /// Update the watermark on/off state and text at runtime.
+    fn set_watermark(&self, enabled: bool, text: String);
     async fn validate_session(&self) -> Result<SessionStatus>;
     async fn login_interactive(&self) -> Result<SessionStatus>;
     async fn publish_image_article(&self, job: &PublishJob) -> Result<PublishResult>;

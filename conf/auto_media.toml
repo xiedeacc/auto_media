@@ -51,9 +51,6 @@ publish_platforms = [
     "twitter",
 ]
 
-# watermark: text stamped onto images before upload (bottom-right).
-#   omit the line  -> use the built-in default shown below
-#   watermark = "" -> disable watermarking for that platform
 [platforms.xhs]
 enabled = true
 mode = "cdp"
@@ -62,6 +59,7 @@ write_url = "https://creator.xiaohongshu.com/publish/publish"
 creator_url = "https://creator.xiaohongshu.com"
 cdp_port = 9223
 watermark = "xiedeacc"
+watermark_enabled = true
 
 [platforms.zhihu]
 enabled = true

@@ -22,7 +22,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -34,8 +34,10 @@ pub struct MediaPlatformAdapter {
     cdp: Box<dyn PublishBackend>,
     api: Box<dyn PublishBackend>,
     prefer_cdp: AtomicBool,
-    /// Resolved watermark text for this platform (`None` = no watermark).
-    watermark: Option<String>,
+    /// Watermark on/off and the text to stamp. Text is kept even while disabled
+    /// so toggling the switch doesn't lose it. Both are runtime-adjustable.
+    watermark_enabled: AtomicBool,
+    watermark_text: Mutex<String>,
 }
 
 /// Built-in watermark text per platform, used when config doesn't override it.
@@ -65,13 +67,15 @@ impl MediaPlatformAdapter {
         let publish_url = resolve_publish_url(&platform_config);
         // `mode = "api"` means prefer the HTTP API; anything else prefers CDP.
         let prefer_cdp = !platform_config.mode.eq_ignore_ascii_case("api");
-        // Config override wins; present-but-empty disables; absent uses the
-        // built-in default for this platform.
-        let watermark = match &platform_config.watermark {
-            Some(text) if text.trim().is_empty() => None,
-            Some(text) => Some(text.clone()),
-            None => default_watermark_text(platform).map(str::to_string),
+        // Watermark text: config override wins; absent/empty falls back to the
+        // platform's built-in default. Enabled defaults to on.
+        let watermark_text = match &platform_config.watermark {
+            Some(text) if !text.trim().is_empty() => text.clone(),
+            _ => default_watermark_text(platform)
+                .map(str::to_string)
+                .unwrap_or_default(),
         };
+        let watermark_enabled = platform_config.watermark_enabled.unwrap_or(true);
         let cdp = cdp_backend(platform, &platform_config, profile_dir, publish_url);
         let api = api_backend(platform, cookies.clone(), topic_cache_file);
         Self {
@@ -80,7 +84,8 @@ impl MediaPlatformAdapter {
             cdp,
             api,
             prefer_cdp: AtomicBool::new(prefer_cdp),
-            watermark,
+            watermark_enabled: AtomicBool::new(watermark_enabled),
+            watermark_text: Mutex::new(watermark_text),
         }
     }
 
@@ -88,16 +93,20 @@ impl MediaPlatformAdapter {
     /// watermarked copies (written to a temp dir). Falls back to the original on
     /// any failure, and returns originals unchanged when no watermark is set.
     fn watermark_images(&self, originals: &[PathBuf]) -> Vec<PathBuf> {
-        let Some(text) = self.watermark.as_deref() else {
+        if !self.watermark_enabled.load(Ordering::Relaxed) {
             return originals.to_vec();
-        };
+        }
+        let text = self.watermark_text.lock().unwrap().trim().to_string();
+        if text.is_empty() {
+            return originals.to_vec();
+        }
         let out_dir = std::env::temp_dir().join("auto_media_watermark");
         originals
             .iter()
             .enumerate()
             .map(|(index, src)| {
                 let prefix = format!("{}_{index}", self.platform.as_str());
-                match crate::watermark::apply(src, &out_dir, &prefix, text) {
+                match crate::watermark::apply(src, &out_dir, &prefix, &text) {
                     Ok(path) => path,
                     Err(error) => {
                         tracing::warn!(
@@ -164,6 +173,19 @@ impl PlatformAdapter for MediaPlatformAdapter {
 
     fn set_prefer_cdp(&self, prefer: bool) {
         self.prefer_cdp.store(prefer, Ordering::Relaxed);
+    }
+
+    fn watermark_enabled(&self) -> bool {
+        self.watermark_enabled.load(Ordering::Relaxed)
+    }
+
+    fn watermark_text(&self) -> String {
+        self.watermark_text.lock().unwrap().clone()
+    }
+
+    fn set_watermark(&self, enabled: bool, text: String) {
+        self.watermark_enabled.store(enabled, Ordering::Relaxed);
+        *self.watermark_text.lock().unwrap() = text;
     }
 
     async fn validate_session(&self) -> Result<SessionStatus> {

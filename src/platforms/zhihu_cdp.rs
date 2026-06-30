@@ -38,8 +38,9 @@ impl ZhihuCdp {
         if !page.click_eval(MAIN_PUBLISH_SCRIPT).await? {
             anyhow::bail!("没有找到知乎发布按钮");
         }
-        let _ = page.drain_dialog_events().await;
-        sleep(Duration::from_millis(2500)).await;
+        // The write -> /p/<id>/edit navigation prompts a `beforeunload`; accept it
+        // (and let the page settle) before reconnecting to the navigated tab.
+        let _ = page.pump_dialogs(3000).await;
 
         // Re-establish the session on the (navigated) Zhihu tab, then drive the
         // panel — topics + confirm — on the fresh connection.
@@ -55,11 +56,11 @@ impl ZhihuCdp {
 
         let added = self.add_topics(&mut page, topics).await;
 
-        // The panel's 发布/确认发布 actually posts.
+        // The panel's 发布/确认发布 actually posts (and navigates away, prompting a
+        // beforeunload). Pump dialogs for a few seconds so it's reliably accepted.
         for _ in 0..20 {
             if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await.unwrap_or(false) {
-                let _ = page.drain_dialog_events().await;
-                sleep(Duration::from_secs(2)).await;
+                let _ = page.pump_dialogs(4000).await;
                 page.set_accept_beforeunload(false);
                 return Ok(format!("已设置 {added} 个话题并点击知乎发布确认按钮"));
             }

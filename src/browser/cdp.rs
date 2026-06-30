@@ -554,6 +554,33 @@ impl CdpPage {
         self.accept_beforeunload = accept;
     }
 
+    /// Keep reading socket events for ~`total_ms`, accepting any JS dialog that
+    /// opens — used after a publish-confirm click whose navigation fires a
+    /// `beforeunload` prompt a moment later (a short drain races and misses it).
+    pub async fn pump_dialogs(&mut self, total_ms: u64) -> Result<()> {
+        let iters = (total_ms / 120).max(1);
+        for _ in 0..iters {
+            let Ok(message) = timeout(Duration::from_millis(120), self.socket.next()).await else {
+                continue; // quiet window — keep pumping until total_ms elapses
+            };
+            let Some(message) = message else {
+                return Ok(());
+            };
+            let Message::Text(text) = message? else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text)?;
+            if value.get("method").and_then(Value::as_str) == Some("Page.javascriptDialogOpening") {
+                let dialog_type = value
+                    .pointer("/params/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                self.handle_javascript_dialog(dialog_type).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Drain any pending `javascriptDialogOpening` events for a short window.
     pub async fn drain_dialog_events(&mut self) -> Result<()> {
         for _ in 0..5 {

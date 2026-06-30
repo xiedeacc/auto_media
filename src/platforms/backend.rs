@@ -193,10 +193,16 @@ pub fn label_center_script(label: &str) -> String {
   const items = Array.from(document.querySelectorAll('button, [role=button], a, div, span'))
     .filter(visible)
     .filter(el => !disabled(el))
-    .map(el => {{ const label = (el.innerText || el.textContent || '').replace(/\s+/g, '').trim(); const rect = el.getBoundingClientRect(); return {{ label, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, area: rect.width * rect.height }}; }})
+    .map(el => {{ const label = (el.innerText || el.textContent || '').replace(/\s+/g, '').trim(); const rect = el.getBoundingClientRect(); return {{ el, label, area: rect.width * rect.height }}; }})
     .filter(item => item.label === wanted && item.area >= 300 && item.area <= 40000)
     .sort((a, b) => a.area - b.area);
-  return items[0] || null;
+  const top = items[0];
+  if (!top) return null;
+  // Buttons are often below the fold; scroll into view so the trusted click at
+  // these coordinates actually lands inside the rendered viewport.
+  top.el.scrollIntoView({{ block: 'center' }});
+  const rect = top.el.getBoundingClientRect();
+  return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
 }})()
 "#
     )
@@ -219,6 +225,7 @@ pub fn selector_center_script(selector: &str) -> String {
   const disabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
   const el = Array.from(document.querySelectorAll(sel)).filter(visible).find(e => !disabled(e));
   if (!el) return null;
+  el.scrollIntoView({{ block: 'center' }});
   const rect = el.getBoundingClientRect();
   return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
 }})()

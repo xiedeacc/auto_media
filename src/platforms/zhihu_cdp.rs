@@ -286,11 +286,16 @@ const MAIN_PUBLISH_SCRIPT: &str = r#"
     .map(el => {
       const label = (el.innerText || el.textContent || '').trim();
       const rect = el.getBoundingClientRect();
-      return { label, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, area: rect.width * rect.height };
+      return { el, label, cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, area: rect.width * rect.height };
     })
-    .filter(item => item.label === '发布' && item.area >= 500 && item.area <= 12000 && item.y > window.innerHeight - 90)
-    .sort((a, b) => b.x - a.x || b.y - a.y || a.area - b.area);
-  return candidates[0] || null;
+    .filter(item => item.label === '发布' && item.area >= 500 && item.area <= 12000)
+    // The editor's primary 发布 (opens the publish panel) is the bottom-right one.
+    .sort((a, b) => (b.cy - a.cy) || (b.cx - a.cx) || (a.area - b.area));
+  const top = candidates[0];
+  if (!top) return null;
+  top.el.scrollIntoView({ block: 'center' });
+  const rect = top.el.getBoundingClientRect();
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 })()
 "#;
 
@@ -315,11 +320,15 @@ const CONFIRM_PUBLISH_SCRIPT: &str = r#"
     .map(el => {
       const label = (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
       const rect = el.getBoundingClientRect();
-      return { label, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, area: rect.width * rect.height };
+      return { el, label, cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, area: rect.width * rect.height };
     })
     .filter(item => ['发布', '确认发布', '发布文章'].includes(item.label) && item.area >= 500 && item.area <= 20000)
-    .sort((a, b) => b.y - a.y || b.x - a.x || a.area - b.area);
-  return candidates[0] || null;
+    .sort((a, b) => b.cy - a.cy || b.cx - a.cx || a.area - b.area);
+  const top = candidates[0];
+  if (!top) return null;
+  top.el.scrollIntoView({ block: 'center' });
+  const rect = top.el.getBoundingClientRect();
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 })()
 "#;
 

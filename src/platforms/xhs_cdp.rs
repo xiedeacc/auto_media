@@ -8,8 +8,12 @@ use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+
+/// Cap how many topics we attach to a Xiaohongshu note.
+const MAX_TOPICS: usize = 10;
 
 /// Canonical image-note publish entry. The creator center routes other publish
 /// URLs through onboarding, so we force the `target=image` flow.
@@ -75,14 +79,19 @@ impl CdpFlow for XhsCdp {
     }
 
     async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
-        let result = page
-            .evaluate(&fill_script(content.title, content.body))
-            .await?;
-        Ok(result
+        // Keep literal hashtags out of the body; add them as real #话题# topics.
+        let body = content.body_without_tags();
+        let result = page.evaluate(&fill_script(content.title, &body)).await?;
+        let mut message = result
             .pointer("/result/value/message")
             .and_then(Value::as_str)
             .unwrap_or("已尝试填充标题/正文")
-            .to_string())
+            .to_string();
+        let added = self.add_topics(page, &content.topic_keywords()).await;
+        if added > 0 {
+            message.push_str(&format!("；已添加 {added} 个话题"));
+        }
+        Ok(message)
     }
 
     async fn wait_publish_ready(&self, page: &mut CdpPage) -> Result<()> {
@@ -120,6 +129,93 @@ impl CdpFlow for XhsCdp {
         }
         anyhow::bail!("没有找到小红书底部发布按钮")
     }
+}
+
+impl XhsCdp {
+    /// Add each tag as a real Xiaohongshu `#话题#`: click the 「话题」 toolbar button
+    /// (inserts `#` + focuses the body + opens the topic popup), type the keyword,
+    /// then click the exact-match suggestion whose `.name` equals `#<keyword>`.
+    /// No exact match → keep the literal text. Resolved topics cache.
+    async fn add_topics(&self, page: &mut CdpPage, keywords: &[String]) -> usize {
+        if keywords.is_empty() {
+            return 0;
+        }
+        let mut cache = self.load_topic_cache();
+        let mut added = 0usize;
+        for keyword in keywords.iter().filter(|k| !k.is_empty()).take(MAX_TOPICS) {
+            if !page.eval_bool(CLICK_TOPIC_BTN_SCRIPT).await.unwrap_or(false) {
+                continue;
+            }
+            sleep(Duration::from_millis(900)).await;
+            for ch in keyword.chars() {
+                let _ = page.insert_text(&ch.to_string()).await;
+                sleep(Duration::from_millis(150)).await;
+            }
+            sleep(Duration::from_millis(1700)).await;
+            if page
+                .click_eval(&pick_topic_script(keyword))
+                .await
+                .unwrap_or(false)
+            {
+                added += 1;
+                cache.insert(keyword.clone(), format!("#{keyword}"));
+            } else {
+                let _ = page.insert_text(" ").await;
+            }
+            sleep(Duration::from_millis(600)).await;
+        }
+        self.save_topic_cache(&cache);
+        added
+    }
+
+    fn topic_cache_path(&self) -> PathBuf {
+        self.profile_dir.join("topic_cache.json")
+    }
+
+    fn load_topic_cache(&self) -> HashMap<String, String> {
+        std::fs::read_to_string(self.topic_cache_path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_topic_cache(&self, cache: &HashMap<String, String>) {
+        if let Ok(text) = serde_json::to_string_pretty(cache) {
+            let _ = std::fs::write(self.topic_cache_path(), text);
+        }
+    }
+}
+
+/// JS-click the (smallest visible) 「话题」 toolbar button.
+const CLICK_TOPIC_BTN_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const b=[...document.querySelectorAll('[class*="topic-btn"]')].filter(vis)
+    .filter(e=>(e.innerText||'').trim()==='话题')
+    .sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;})[0];
+  if(!b) return false;
+  b.scrollIntoView({block:'center'});
+  b.click();
+  return true;
+})()
+"#;
+
+/// Return the center `{x,y}` of the topic suggestion `.item` whose `.name` equals
+/// `#<keyword>` exactly (suggestion rows carry a `.name` span + a heat label).
+fn pick_topic_script(keyword: &str) -> String {
+    let want = serde_json::to_string(&format!("#{keyword}")).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(() => {{
+  const want={want};
+  const vis=(el)=>{{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';}};
+  const items=[...document.querySelectorAll('.item')].filter(vis).filter(it=>{{const n=it.querySelector('.name');return n&&(n.innerText||'').trim()===want;}});
+  if(!items.length) return null;
+  const r=items[0].getBoundingClientRect();
+  return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+}})()
+"#
+    )
 }
 
 const READY_SCRIPT: &str = r#"

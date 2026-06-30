@@ -6,6 +6,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Every platform shares ONE Chrome profile + debug port, so manual publishing
+/// opens a single window with one tab per platform (not a process per profile).
+pub const SHARED_CDP_PORT: u16 = 9222;
+/// Sub-directory name of the shared Chrome profile under `browser_profiles`.
+pub const SHARED_PROFILE_NAME: &str = "shared";
+
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
     pub root: PathBuf,
@@ -15,6 +21,7 @@ pub struct RuntimePaths {
     pub logs_dir: PathBuf,
     pub auth_dir: PathBuf,
     pub browser_profiles_dir: PathBuf,
+    pub shared_profile_dir: PathBuf,
     pub config_file: PathBuf,
     pub state_file: PathBuf,
 }
@@ -38,6 +45,7 @@ impl RuntimePaths {
         let logs_dir = root.join("logs");
         let auth_dir = conf_dir.join("auth");
         let browser_profiles_dir = conf_dir.join("browser_profiles");
+        let shared_profile_dir = browser_profiles_dir.join(SHARED_PROFILE_NAME);
         let config_file = conf_dir.join("auto_media.toml");
         let state_file = conf_dir.join("state.sqlite");
 
@@ -49,6 +57,7 @@ impl RuntimePaths {
             logs_dir,
             auth_dir,
             browser_profiles_dir,
+            shared_profile_dir,
             config_file,
             state_file,
         })
@@ -62,12 +71,9 @@ impl RuntimePaths {
             &self.logs_dir,
             &self.auth_dir,
             &self.browser_profiles_dir,
+            &self.shared_profile_dir,
         ] {
             fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        }
-        for platform in Platform::ALL {
-            let dir = self.browser_profiles_dir.join(platform.as_str());
-            fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         }
         Ok(())
     }

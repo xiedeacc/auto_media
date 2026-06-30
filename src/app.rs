@@ -8,7 +8,6 @@ use crate::{
     state::StateStore,
 };
 use anyhow::{Context, Result};
-use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tauri::WindowEvent;
@@ -152,8 +151,11 @@ impl AppController {
             message: format!("准备发送到 {} 个平台", platform_names.len()),
         });
 
-        let mut publish_tasks = FuturesUnordered::new();
         let mut reports: Vec<(Platform, String)> = Vec::new();
+        // One shared window: open it, then publish to each platform's tab in turn
+        // (sequential = the driven tab is foreground, so trusted clicks always
+        // land and it reads like a person doing one platform at a time).
+        self.ensure_browser().await;
         for platform_name in &platform_names {
             let platform: Platform = platform_name.parse()?;
             let Some(adapter) = self.adapters.get(&platform) else {
@@ -176,8 +178,7 @@ impl AppController {
             let adapter = adapter.clone();
             let state = self.state.clone();
             let job = job.clone();
-            publish_tasks.push(async move {
-                let result: Result<(String, String)> = async {
+            let result: Result<(String, String)> = async {
                     let session_status = match adapter.validate_session().await {
                         Ok(status) => status,
                         Err(error) => {
@@ -248,11 +249,6 @@ impl AppController {
                     }
                 }
                 .await;
-                (platform, result)
-            });
-        }
-
-        while let Some((platform, result)) = publish_tasks.next().await {
             let (status, message) = match result {
                 Ok(result) => result,
                 Err(error) => ("failed".to_string(), format!("{error:#}")),
@@ -264,6 +260,9 @@ impl AppController {
             });
             reports.push((platform, format!("{platform}: {message}")));
         }
+
+        // Publishing done — close the shared browser window/process.
+        self.close_browser_tabs().await;
 
         reports.sort_by_key(|(platform, _)| {
             platform_names
@@ -312,30 +311,22 @@ impl AppController {
         self.config.publish.title_pattern.clone()
     }
 
-    pub async fn close_browser_tabs(&self) {
-        let browser = CdpBrowser;
-        for platform in Platform::ALL {
-            let section = self.config.platforms.section_for(platform);
-            if !section.enabled {
-                continue;
-            }
-            let port = section.cdp_port;
+    /// Launch the single shared Chrome window once, before a publish fans out so
+    /// the per-platform tabs land in one window (and don't race to launch it).
+    pub async fn ensure_browser(&self) {
+        if let Err(error) = CdpBrowser
+            .ensure_running(&self.paths.shared_profile_dir, crate::config::SHARED_CDP_PORT)
+            .await
+        {
+            tracing::warn!(error = %error, "failed to ensure shared browser running");
+        }
+    }
 
-            match browser.close_all_tabs(port).await {
-                Ok(count) if count > 0 => tracing::info!(
-                    platform = %platform,
-                    port,
-                    count,
-                    "closed browser tabs"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(
-                    platform = %platform,
-                    port,
-                    error = %error,
-                    "failed to close browser tabs"
-                ),
-            }
+    pub async fn close_browser_tabs(&self) {
+        let port = crate::config::SHARED_CDP_PORT;
+        match CdpBrowser.close_browser(port).await {
+            Ok(()) => tracing::info!(port, "closed shared browser"),
+            Err(error) => tracing::warn!(port, error = %error, "failed to close shared browser"),
         }
     }
 }
@@ -426,12 +417,16 @@ fn build_adapters(
         if !section.enabled {
             continue;
         }
+        // All platforms share one Chrome profile + port → one window, tabs per
+        // platform. The per-platform login_url/write_url still differ.
+        let mut section = section.clone();
+        section.cdp_port = crate::config::SHARED_CDP_PORT;
         adapters.insert(
             platform,
             Arc::new(MediaPlatformAdapter::new(
                 platform,
-                section.clone(),
-                paths.browser_profiles_dir.join(platform.as_str()),
+                section,
+                paths.shared_profile_dir.clone(),
                 paths
                     .auth_dir
                     .join(format!("{}.cookies.enc", platform.as_str())),

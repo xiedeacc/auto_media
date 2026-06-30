@@ -105,11 +105,10 @@ impl CdpBrowser {
                 .ok()
                 .and_then(|response| response.error_for_status().ok())
             {
+                // Keep existing tabs open: one shared window holds a tab per
+                // platform during a manual publish (they're closed together after).
                 Some(response) => match response.json::<TargetInfo>().await.ok() {
-                    Some(target) => {
-                        let _ = self.close_other_tabs(port, &target.id).await;
-                        target.web_socket_debugger_url
-                    }
+                    Some(target) => target.web_socket_debugger_url,
                     None => None,
                 },
                 None => None,
@@ -178,26 +177,56 @@ impl CdpBrowser {
         Ok(closed)
     }
 
-    async fn close_other_tabs(&self, port: u16, keep_id: &str) -> Result<usize> {
-        let url = format!("http://127.0.0.1:{port}/json");
-        let targets = match http_client().get(url).send().await {
-            Ok(response) if response.status().is_success() => {
-                response.json::<Vec<TargetInfo>>().await.unwrap_or_default()
-            }
-            _ => return Ok(0),
+    /// Launch the shared browser once (blank tab) if it isn't already running, so
+    /// the concurrent-safe `open_visible` calls during a publish only ever *add*
+    /// tabs to one window instead of racing to launch the same profile.
+    pub async fn ensure_running(&self, profile_dir: &Path, port: u16) -> Result<()> {
+        if self.is_ready(port).await {
+            return Ok(());
+        }
+        std::fs::create_dir_all(profile_dir)
+            .with_context(|| format!("create browser profile {}", profile_dir.display()))?;
+        let executable = find_browser_executable()
+            .ok_or_else(|| anyhow!("Chrome or Edge executable was not found"))?;
+        launch_browser(&executable, profile_dir, port, "about:blank").await?;
+        self.wait_until_ready(port).await
+    }
+
+    /// Gracefully close the whole browser (all tabs + the process) via the
+    /// browser-level `Browser.close`, falling back to closing each tab.
+    pub async fn close_browser(&self, port: u16) -> Result<()> {
+        let ws = match http_client()
+            .get(format!("http://127.0.0.1:{port}/json/version"))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => response
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("webSocketDebuggerUrl")
+                        .and_then(Value::as_str)
+                        .map(String::from)
+                }),
+            _ => None,
         };
 
-        let mut closed = 0;
-        for target in targets
-            .into_iter()
-            .filter(|target| target.target_type == "page" && target.id != keep_id)
-        {
-            let close_url = format!("http://127.0.0.1:{port}/json/close/{}", target.id);
-            if http_client().get(close_url).send().await.is_ok() {
-                closed += 1;
-            }
+        let Some(ws) = ws else {
+            let _ = self.close_all_tabs(port).await;
+            return Ok(());
+        };
+        if let Ok((mut socket, _)) = connect_async(ws).await {
+            let _ = socket
+                .send(Message::Text(
+                    json!({ "id": 1, "method": "Browser.close" })
+                        .to_string()
+                        .into(),
+                ))
+                .await;
         }
-        Ok(closed)
+        Ok(())
     }
 
     async fn wait_until_ready(&self, port: u16) -> Result<()> {

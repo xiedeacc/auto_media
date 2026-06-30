@@ -166,7 +166,7 @@ impl XhsCdp {
     }
 
     fn topic_cache_path(&self) -> PathBuf {
-        self.profile_dir.join("topic_cache.json")
+        self.profile_dir.join("xhs_topic_cache.json")
     }
 
     fn load_topic_cache(&self) -> HashMap<String, String> {

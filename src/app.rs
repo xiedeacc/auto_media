@@ -41,6 +41,8 @@ pub struct PlatformSessionSummary {
     pub platform: String,
     pub status: SessionStatus,
     pub label: String,
+    /// Preferred backend: "cdp" or "api".
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +107,7 @@ impl AppController {
                     platform: platform.as_str().to_string(),
                     label: status.label().to_string(),
                     status,
+                    mode: if adapter.prefer_cdp() { "cdp" } else { "api" }.to_string(),
                 });
             }
         }
@@ -283,8 +286,12 @@ impl AppController {
         Ok(message)
     }
 
-    pub fn scheduler(&self) -> Scheduler {
-        self.scheduler.clone()
+    pub fn set_platform_mode(&self, platform: Platform, prefer_cdp: bool) -> Result<()> {
+        if let Some(adapter) = self.adapters.get(&platform) {
+            adapter.set_prefer_cdp(prefer_cdp);
+        }
+        let mode = if prefer_cdp { "cdp" } else { "api" };
+        crate::config::update_platform_mode(&self.paths, platform, mode)
     }
 
     pub fn path_summary(&self) -> PathSummary {
@@ -373,6 +380,7 @@ pub fn run() -> Result<()> {
             commands::clear_records,
             commands::set_paused,
             commands::login_platform,
+            commands::set_platform_mode,
             commands::set_autostart,
             commands::open_dir,
         ])
@@ -387,10 +395,8 @@ pub fn run() -> Result<()> {
                 crate::startup::hide_main_window(app.handle());
             }
 
-            let scheduler = controller.scheduler();
-            tauri::async_runtime::spawn(async move {
-                scheduler.run_forever().await;
-            });
+            // Automatic detection/publishing is disabled; publishing is manual only.
+            let _ = &controller;
 
             Ok(())
         })

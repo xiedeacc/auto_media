@@ -155,6 +155,11 @@ pub struct PublishResult {
 #[async_trait]
 pub trait PlatformAdapter: Send + Sync {
     fn platform(&self) -> Platform;
+    /// Whether CDP (browser) is the preferred backend; `false` means the HTTP API
+    /// is preferred. The non-preferred backend is still used as a fallback.
+    fn prefer_cdp(&self) -> bool;
+    /// Switch the preferred backend at runtime.
+    fn set_prefer_cdp(&self, prefer: bool);
     async fn validate_session(&self) -> Result<SessionStatus>;
     async fn login_interactive(&self) -> Result<SessionStatus>;
     async fn publish_image_article(&self, job: &PublishJob) -> Result<PublishResult>;

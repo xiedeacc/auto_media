@@ -15,25 +15,11 @@
         </div>
         <div class="actions">
           <button id="manual-post" type="button">手动发文</button>
-          <button id="run-now" type="button">立即检测</button>
-          <button id="pause-toggle" type="button">启动</button>
           <button id="logs-button" type="button">日志</button>
         </div>
       </header>
 
       <section class="status-grid">
-        <article class="panel">
-          <span class="label">运行状态</span>
-          <strong id="state">-</strong>
-          <small id="last-tick">-</small>
-        </article>
-        <article class="panel">
-          <span class="label">最近检测</span>
-          <strong id="recent-check">-</strong>
-          <span class="label stacked">下次唤醒</span>
-          <strong id="next-wakeup">-</strong>
-          <small>每 10 分钟检测一次</small>
-        </article>
         <article class="panel">
           <span class="label">开机自启动</span>
           <label class="switch">
@@ -49,7 +35,7 @@
           <article class="platform">
             <div>
               <span class="label">小红书</span>
-              <strong>CDP</strong>
+              <button class="mode-toggle" data-mode-platform="xhs" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="xhs">检测中</small>
             </div>
             <button data-login="xhs" type="button">登录</button>
@@ -57,7 +43,7 @@
           <article class="platform">
             <div>
               <span class="label">知乎</span>
-              <strong>CDP</strong>
+              <button class="mode-toggle" data-mode-platform="zhihu" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="zhihu">检测中</small>
             </div>
             <button data-login="zhihu" type="button">登录</button>
@@ -65,7 +51,7 @@
           <article class="platform">
             <div>
               <span class="label">Twitter/X</span>
-              <strong>CDP</strong>
+              <button class="mode-toggle" data-mode-platform="twitter" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="twitter">检测中</small>
             </div>
             <button data-login="twitter" type="button">登录</button>
@@ -73,7 +59,7 @@
           <article class="platform">
             <div>
               <span class="label">雪球</span>
-              <strong>CDP</strong>
+              <button class="mode-toggle" data-mode-platform="xueqiu" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="xueqiu">检测中</small>
             </div>
             <button data-login="xueqiu" type="button">登录</button>
@@ -81,7 +67,7 @@
           <article class="platform">
             <div>
               <span class="label">抖音</span>
-              <strong>CDP</strong>
+              <button class="mode-toggle" data-mode-platform="douyin" type="button">CDP</button>
               <small class="platform-status unknown" data-platform-status="douyin">检测中</small>
             </div>
             <button data-login="douyin" type="button">登录</button>

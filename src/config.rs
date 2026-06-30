@@ -194,6 +194,16 @@ impl PlatformSections {
             Platform::Douyin => &self.douyin,
         }
     }
+
+    pub fn section_for_mut(&mut self, platform: Platform) -> &mut PlatformSection {
+        match platform {
+            Platform::Xhs => &mut self.xhs,
+            Platform::Zhihu => &mut self.zhihu,
+            Platform::Twitter => &mut self.twitter,
+            Platform::Xueqiu => &mut self.xueqiu,
+            Platform::Douyin => &mut self.douyin,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,6 +355,16 @@ pub fn load_or_create(paths: &RuntimePaths) -> Result<AppConfig> {
             .with_context(|| format!("write {}", paths.config_file.display()))?;
         Ok(config)
     }
+}
+
+/// Persist a single platform's preferred backend mode ("cdp" or "api") to the
+/// config file, preserving all other current on-disk settings.
+pub fn update_platform_mode(paths: &RuntimePaths, platform: Platform, mode: &str) -> Result<()> {
+    let mut config = load_or_create(paths)?;
+    config.platforms.section_for_mut(platform).mode = mode.to_string();
+    let text = toml::to_string_pretty(&config).context("serialize config")?;
+    fs::write(&paths.config_file, text)
+        .with_context(|| format!("write {}", paths.config_file.display()))
 }
 
 pub fn resolve_configured_data_dir(paths: &RuntimePaths, config: &AppConfig) -> PathBuf {

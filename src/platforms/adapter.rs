@@ -18,15 +18,22 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 /// One adapter per platform. Owns the shared cookie store plus a CDP and an HTTP
-/// API backend, and publishes by preferring CDP and falling back to the API.
+/// API backend, and publishes via the preferred backend, falling back to the other.
 pub struct MediaPlatformAdapter {
     platform: Platform,
     cookies: Arc<CookieStore>,
     cdp: Box<dyn PublishBackend>,
     api: Box<dyn PublishBackend>,
+    prefer_cdp: AtomicBool,
 }
 
 impl MediaPlatformAdapter {
@@ -44,6 +51,8 @@ impl MediaPlatformAdapter {
             auth_file,
         ));
         let publish_url = resolve_publish_url(&platform_config);
+        // `mode = "api"` means prefer the HTTP API; anything else prefers CDP.
+        let prefer_cdp = !platform_config.mode.eq_ignore_ascii_case("api");
         let cdp = cdp_backend(platform, &platform_config, profile_dir, publish_url);
         let api = api_backend(platform, cookies.clone(), topic_cache_file);
         Self {
@@ -51,28 +60,36 @@ impl MediaPlatformAdapter {
             cookies,
             cdp,
             api,
+            prefer_cdp: AtomicBool::new(prefer_cdp),
         }
     }
 
-    /// Publish via CDP first; on failure fall back to the HTTP API backend.
+    /// Publish via the preferred backend; on failure fall back to the other.
     /// This is the single place the user-facing message is composed.
     async fn publish_content(&self, content: PublishContent<'_>) -> Result<PublishResult> {
-        let message = match self.cdp.publish(content).await {
-            Ok(message) => format!("{} 已通过浏览器(CDP)提交。{message}", self.platform),
-            Err(cdp_error) => {
+        let prefer_cdp = self.prefer_cdp.load(Ordering::Relaxed);
+        let (primary, secondary, primary_name, secondary_name) = if prefer_cdp {
+            (&self.cdp, &self.api, "浏览器(CDP)", "API")
+        } else {
+            (&self.api, &self.cdp, "API", "浏览器(CDP)")
+        };
+
+        let message = match primary.publish(content).await {
+            Ok(message) => format!("{} 已通过{primary_name}提交。{message}", self.platform),
+            Err(primary_error) => {
                 tracing::warn!(
                     platform = %self.platform,
-                    error = %cdp_error,
-                    "cdp publish failed, falling back to api"
+                    error = %primary_error,
+                    "{primary_name} publish failed, falling back"
                 );
-                match self.api.publish(content).await {
-                    Ok(api_message) => format!(
-                        "{} CDP 发布失败，已回退 API：{cdp_error:#}；{api_message}",
+                match secondary.publish(content).await {
+                    Ok(secondary_message) => format!(
+                        "{} {primary_name}发布失败，已回退{secondary_name}：{primary_error:#}；{secondary_message}",
                         self.platform
                     ),
-                    Err(api_error) => {
+                    Err(secondary_error) => {
                         return Err(anyhow!(
-                            "{} CDP 与 API 均发布失败。CDP：{cdp_error:#}；API：{api_error:#}",
+                            "{} {primary_name}与{secondary_name}均发布失败。{primary_name}：{primary_error:#}；{secondary_name}：{secondary_error:#}",
                             self.platform
                         ));
                     }
@@ -91,6 +108,14 @@ impl MediaPlatformAdapter {
 impl PlatformAdapter for MediaPlatformAdapter {
     fn platform(&self) -> Platform {
         self.platform
+    }
+
+    fn prefer_cdp(&self) -> bool {
+        self.prefer_cdp.load(Ordering::Relaxed)
+    }
+
+    fn set_prefer_cdp(&self, prefer: bool) {
+        self.prefer_cdp.store(prefer, Ordering::Relaxed);
     }
 
     async fn validate_session(&self) -> Result<SessionStatus> {

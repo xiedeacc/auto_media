@@ -201,6 +201,22 @@ pub async fn login_platform(state: State<'_, SharedState>, platform: String) -> 
 }
 
 #[tauri::command]
+pub async fn set_platform_mode(
+    state: State<'_, SharedState>,
+    platform: String,
+    mode: String,
+) -> Result<(), String> {
+    let platform = platform
+        .parse::<Platform>()
+        .map_err(|error| error.to_string())?;
+    let prefer_cdp = !mode.eq_ignore_ascii_case("api");
+    state
+        .controller
+        .set_platform_mode(platform, prefer_cdp)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     crate::startup::set_autostart(&app, enabled).map_err(|error| error.to_string())
 }

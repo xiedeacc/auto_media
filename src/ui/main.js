@@ -3,13 +3,7 @@ const listen = window.__TAURI__.event?.listen;
 
 const els = {
   message: document.querySelector("#message"),
-  state: document.querySelector("#state"),
-  lastTick: document.querySelector("#last-tick"),
-  recentCheck: document.querySelector("#recent-check"),
-  nextWakeup: document.querySelector("#next-wakeup"),
   manualPost: document.querySelector("#manual-post"),
-  runNow: document.querySelector("#run-now"),
-  pauseToggle: document.querySelector("#pause-toggle"),
   logsButton: document.querySelector("#logs-button"),
   clearRecords: document.querySelector("#clear-records"),
   autostart: document.querySelector("#autostart"),
@@ -35,6 +29,7 @@ const els = {
   manualPlatforms: document.querySelectorAll('input[name="manual-platform"]'),
   platformStatuses: document.querySelectorAll("[data-platform-status]"),
   loginButtons: document.querySelectorAll("[data-login]"),
+  modeToggles: document.querySelectorAll("[data-mode-platform]"),
 };
 
 let paused = false;
@@ -62,14 +57,8 @@ async function refresh() {
   try {
     const data = await call("get_status");
     const status = data.status;
-    paused = status.paused;
     lastMessage = status.last_message || "";
     els.message.textContent = "";
-    els.state.textContent = paused ? "stopped" : status.state;
-    els.lastTick.textContent = status.last_tick ? "最近状态已更新" : "-";
-    els.recentCheck.textContent = fmt(status.last_tick);
-    els.nextWakeup.textContent = fmt(status.next_wakeup);
-    els.pauseToggle.textContent = paused ? "启动" : "停止";
     els.autostart.checked = Boolean(data.autostart_enabled);
     defaultTags = data.publish_tags || [];
     publishTitlePattern = data.publish_title_pattern || "";
@@ -323,11 +312,22 @@ function renderManualImages() {
   els.imageList.innerHTML = manualImages
     .map(
       (path, index) => `<div class="image-row" role="button" tabindex="0" data-preview-image="${index}">
-        <span>${escapeHtml(path)}</span>
+        <img class="image-thumb" data-thumb="${index}" alt="" />
+        <span title="${escapeHtml(path)}">${escapeHtml(path)}</span>
         <button type="button" data-remove-image="${index}">移除</button>
       </div>`,
     )
     .join("");
+
+  els.imageList.querySelectorAll("[data-thumb]").forEach((img) => {
+    const path = manualImages[Number(img.dataset.thumb)];
+    if (!path) return;
+    call("read_image_preview", { path })
+      .then((src) => {
+        img.src = src;
+      })
+      .catch(() => {});
+  });
 
   els.imageList.querySelectorAll("[data-remove-image]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -419,6 +419,14 @@ function renderPlatformSessions(sessions) {
     const session = byPlatform.get(button.dataset.login);
     button.textContent = session?.label === "已登录" ? "重新登录" : "登录";
   });
+  els.modeToggles.forEach((toggle) => {
+    const session = byPlatform.get(toggle.dataset.modePlatform);
+    const mode = session?.mode === "api" ? "api" : "cdp";
+    toggle.textContent = mode.toUpperCase();
+    toggle.dataset.mode = mode;
+    toggle.className = `mode-toggle mode-${mode}`;
+    toggle.title = mode === "cdp" ? "优先浏览器(CDP)，点击切换为 API" : "优先 API，点击切换为 CDP";
+  });
 }
 
 function statusClass(label) {
@@ -464,21 +472,6 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
-
-els.runNow.addEventListener("click", async () => {
-  if (busy) return;
-  busy = true;
-  els.runNow.disabled = true;
-  try {
-    await call("run_now");
-    await refresh();
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy = false;
-    els.runNow.disabled = false;
-  }
-});
 
 els.manualPost.addEventListener("click", openManualModal);
 els.logsButton.addEventListener("click", openLogsModal);
@@ -579,13 +572,20 @@ els.submitManual.addEventListener("click", async () => {
   }
 });
 
-els.pauseToggle.addEventListener("click", async () => {
-  try {
-    await call("set_paused", { paused: !paused });
-    await refresh();
-  } catch (error) {
-    showError(error);
-  }
+els.modeToggles.forEach((toggle) => {
+  toggle.addEventListener("click", async () => {
+    const current = toggle.dataset.mode === "api" ? "api" : "cdp";
+    const next = current === "cdp" ? "api" : "cdp";
+    try {
+      await call("set_platform_mode", {
+        platform: toggle.dataset.modePlatform,
+        mode: next,
+      });
+      await refresh();
+    } catch (error) {
+      showError(error);
+    }
+  });
 });
 
 els.autostart.addEventListener("change", async () => {

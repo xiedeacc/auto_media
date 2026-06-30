@@ -40,12 +40,16 @@ fn keystroke_delay() -> u64 {
 
 /// Detects a visible manual-verification prompt (SMS code / captcha / slider /
 /// scan-login) on the page, so a publish run can pause instead of auto-closing.
+/// The phrase must sit inside a modal/overlay (role=dialog, aria-modal, or a
+/// fixed-position ancestor) — real verification is always a popup, so this avoids
+/// false positives from ordinary page text that happens to contain "验证".
 const INTERVENTION_SCRIPT: &str = r#"
 (() => {
   const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
-  const phrases=['短信验证码','安全验证','人机验证','拖动滑块','滑块验证','向右滑动','扫码登录','完成验证','验证身份','请输入验证码','captcha'];
-  const els=[...document.querySelectorAll('div,span,p,h1,h2,h3,label,button')].filter(vis);
-  return els.some(e=>{const t=(e.innerText||'').trim();return t.length>0&&t.length<60&&phrases.some(p=>t.includes(p));});
+  const phrases=['短信验证码','安全验证','人机验证','拖动滑块','滑块验证','扫码登录','完成验证','验证身份','请输入验证码','captcha'];
+  const inOverlay=(el)=>{let n=el;for(let i=0;i<10&&n;i++){const role=n.getAttribute&&n.getAttribute('role');const modal=n.getAttribute&&n.getAttribute('aria-modal');const pos=getComputedStyle(n).position;if(role==='dialog'||modal==='true'||pos==='fixed') return true;n=n.parentElement;}return false;};
+  const els=[...document.querySelectorAll('div,span,p,h1,h2,h3,label')].filter(vis);
+  return els.some(e=>{const t=(e.innerText||'').trim();return t.length>0&&t.length<60&&phrases.some(p=>t.includes(p))&&inOverlay(e);});
 })()
 "#;
 

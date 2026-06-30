@@ -13,8 +13,12 @@ use super::Platform;
 use crate::browser::cdp::{CdpBrowser, CdpPage};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+
+/// Cap how many topics we attach to a Xueqiu status.
+const MAX_TOPICS: usize = 5;
 
 /// The composer's own file input lives inside `.lite-editor` (with an empty
 /// `accept`); the page's `image/*` inputs belong to report/moderation forms, so
@@ -86,10 +90,16 @@ impl CdpFlow for XueqiuCdp {
     }
 
     async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
-        let text = join_text(content.title, content.body);
+        // Keep literal hashtags out of the text; add them as real #话题# tags.
+        let text = join_text(content.title, &content.body_without_tags());
         page.evaluate(&fill_editable_script(STATUS_FIELD_SELECTORS, &text))
             .await?;
-        Ok("雪球动态正文已填充".to_string())
+        let added = self.add_topics(page, &content.topic_keywords()).await;
+        if added > 0 {
+            Ok(format!("雪球动态正文已填充；已添加 {added} 个话题"))
+        } else {
+            Ok("雪球动态正文已填充".to_string())
+        }
     }
 
     async fn click_publish(
@@ -106,6 +116,81 @@ impl CdpFlow for XueqiuCdp {
         }
         anyhow::bail!("没有找到雪球发布按钮")
     }
+}
+
+impl XueqiuCdp {
+    /// Add each tag as a real Xueqiu `#话题#` tag: focus the composer at the end,
+    /// type `#<keyword>`, wait for the `.mention-popup__item` list, and click the
+    /// exact `#<keyword>#` item. No exact match → leave the typed text. Resolved
+    /// keyword→tag titles are cached.
+    async fn add_topics(&self, page: &mut CdpPage, keywords: &[String]) -> usize {
+        if keywords.is_empty() {
+            return 0;
+        }
+        let mut cache = self.load_topic_cache();
+        let mut added = 0usize;
+        // The composer already has trusted focus (prepare clicked it) and keeps it
+        // across popup selections, so type `#topic` directly — a programmatic
+        // refocus/selection here actually *breaks* Input.insertText.
+        for keyword in keywords.iter().filter(|k| !k.is_empty()).take(MAX_TOPICS) {
+            let _ = page.insert_text(" #").await;
+            sleep(Duration::from_millis(300)).await;
+            for ch in keyword.chars() {
+                let _ = page.insert_text(&ch.to_string()).await;
+                sleep(Duration::from_millis(140)).await;
+            }
+            sleep(Duration::from_millis(1500)).await;
+            if page
+                .click_eval(&pick_topic_script(keyword))
+                .await
+                .unwrap_or(false)
+            {
+                added += 1;
+                cache.insert(keyword.clone(), format!("#{keyword}#"));
+            } else {
+                let _ = page.insert_text(" ").await;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+        self.save_topic_cache(&cache);
+        added
+    }
+
+    fn topic_cache_path(&self) -> PathBuf {
+        self.profile_dir.join("topic_cache.json")
+    }
+
+    fn load_topic_cache(&self) -> HashMap<String, String> {
+        std::fs::read_to_string(self.topic_cache_path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_topic_cache(&self, cache: &HashMap<String, String>) {
+        if let Ok(text) = serde_json::to_string_pretty(cache) {
+            let _ = std::fs::write(self.topic_cache_path(), text);
+        }
+    }
+}
+
+/// Return the center `{x,y}` of the topic-popup item whose text is exactly
+/// `#<keyword>#` (Xueqiu wraps topics in hashes). Items are `.mention-popup__item`.
+fn pick_topic_script(keyword: &str) -> String {
+    let want = serde_json::to_string(&format!("#{keyword}#")).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(() => {{
+  const want={want};
+  const vis=(el)=>{{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';}};
+  const items=[...document.querySelectorAll('.mention-popup__item')].filter(vis);
+  const exact=items.find(e=>(e.innerText||'').trim()===want);
+  if(!exact) return null;
+  const r=exact.getBoundingClientRect();
+  return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+}})()
+"#
+    )
 }
 
 fn join_text(title: &str, body: &str) -> String {

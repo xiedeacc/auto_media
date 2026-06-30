@@ -225,7 +225,8 @@ pub struct PlatformSection {
 fn default_twitter_platform() -> PlatformSection {
     PlatformSection {
         enabled: true,
-        mode: "cdp".to_string(),
+        // X composer resists CDP input — post via the API (see Default impl note).
+        mode: "api".to_string(),
         login_url: "https://x.com/i/flow/login".to_string(),
         creator_url: Some("https://x.com".to_string()),
         write_url: Some("https://x.com/home".to_string()),
@@ -332,7 +333,10 @@ impl Default for AppConfig {
                 },
                 twitter: PlatformSection {
                     enabled: true,
-                    mode: "cdp".to_string(),
+                    // X's composer (DraftJS) hard-rejects programmatic text input, so
+                    // CDP can only attach the image — use the API (CreateTweet) which
+                    // posts text + hashtags + media reliably.
+                    mode: "api".to_string(),
                     login_url: "https://x.com/i/flow/login".to_string(),
                     creator_url: Some("https://x.com".to_string()),
                     write_url: Some("https://x.com/home".to_string()),

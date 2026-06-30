@@ -14,6 +14,10 @@ pub struct PublishJob {
     pub target_date: NaiveDate,
     pub title: String,
     pub body_text: String,
+    /// Raw tags (kept separately so CDP flows can set real topics; `body_text`
+    /// also carries them appended as a trailing hashtag line for inline use).
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub image_path: PathBuf,
     pub image_size: u64,
     pub image_mtime: i64,
@@ -24,7 +28,16 @@ pub struct ManualPublishJob {
     pub job_id: String,
     pub title: String,
     pub body_text: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub image_paths: Vec<PathBuf>,
+}
+
+fn clean_tags(tags: &[String]) -> Vec<String> {
+    tags.iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect()
 }
 
 impl PublishJob {
@@ -53,6 +66,7 @@ impl PublishJob {
             target_date,
             title,
             body_text,
+            tags: clean_tags(tags),
             image_path,
             image_size,
             image_mtime,
@@ -117,6 +131,7 @@ impl ManualPublishJob {
             job_id: hex::encode(hasher.finalize()),
             title,
             body_text,
+            tags: clean_tags(tags),
             image_paths,
         })
     }

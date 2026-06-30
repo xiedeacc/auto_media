@@ -132,6 +132,7 @@ impl PlatformAdapter for MediaPlatformAdapter {
             title: &job.title,
             body: &job.body_text,
             image_paths: images,
+            tags: &job.tags,
         })
         .await
     }
@@ -141,6 +142,7 @@ impl PlatformAdapter for MediaPlatformAdapter {
             title: &job.title,
             body: &job.body_text,
             image_paths: &job.image_paths,
+            tags: &job.tags,
         })
         .await
     }

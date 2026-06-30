@@ -21,6 +21,41 @@ pub struct PublishContent<'a> {
     pub title: &'a str,
     pub body: &'a str,
     pub image_paths: &'a [PathBuf],
+    /// Raw tags (each may carry a leading `#`). `body` already has these appended
+    /// as a trailing hashtag line; platforms that set *real* topics use these
+    /// instead (and call [`body_without_tags`](Self::body_without_tags)).
+    pub tags: &'a [String],
+}
+
+impl PublishContent<'_> {
+    /// The body with the trailing "#tag #tag" line stripped — for platforms that
+    /// attach real topic chips rather than leaving literal hashtags in the text.
+    pub fn body_without_tags(&self) -> String {
+        if self.tags.is_empty() {
+            return self.body.trim().to_string();
+        }
+        let tag_line = self
+            .tags
+            .iter()
+            .map(|tag| tag.trim())
+            .filter(|tag| !tag.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        match self.body.trim_end().strip_suffix(&tag_line) {
+            Some(prefix) => prefix.trim_end().to_string(),
+            None => self.body.trim().to_string(),
+        }
+    }
+
+    /// Tags with any leading `#`/whitespace removed and blanks dropped — the form
+    /// a topic search box expects (search "投资", not "#投资").
+    pub fn topic_keywords(&self) -> Vec<String> {
+        self.tags
+            .iter()
+            .map(|tag| tag.trim().trim_start_matches('#').trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect()
+    }
 }
 
 /// A single publishing transport for one platform. Both the CDP (browser
@@ -48,16 +83,23 @@ pub trait CdpFlow: Send + Sync {
     /// Attach the images to the page's upload control.
     async fn upload_images(&self, page: &mut CdpPage, images: &[PathBuf]) -> Result<String>;
 
-    /// Fill the title and/or body fields.
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String>;
+    /// Fill the title and/or body fields. Receives the full content so platforms
+    /// can choose inline hashtags (`content.body`) or a clean body
+    /// (`content.body_without_tags()`) plus real topics.
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String>;
 
     /// Optional: wait for the publish button to become enabled before clicking.
     async fn wait_publish_ready(&self, _page: &mut CdpPage) -> Result<()> {
         Ok(())
     }
 
-    /// Click the final publish/submit control.
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String>;
+    /// Click the final publish/submit control. Receives the content so flows whose
+    /// topic UI lives in the publish dialog (Zhihu) can set topics before confirming.
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        content: PublishContent<'_>,
+    ) -> Result<String>;
 
     /// `true` if text must be filled *before* uploading images (Zhihu), `false`
     /// if images are uploaded first and text filled after (Xiaohongshu, default).
@@ -108,7 +150,7 @@ pub async fn run_flow(
 
     let mut messages = Vec::new();
     if flow.fill_before_upload() {
-        match flow.fill_text(&mut page, content.title, content.body).await {
+        match flow.fill_text(&mut page, content).await {
             Ok(message) => messages.push(message),
             Err(error) => messages.push(format!("填标题/正文失败: {error}")),
         }
@@ -123,14 +165,14 @@ pub async fn run_flow(
     }
 
     if !flow.fill_before_upload() {
-        match flow.fill_text(&mut page, content.title, content.body).await {
+        match flow.fill_text(&mut page, content).await {
             Ok(message) => messages.push(message),
             Err(error) => messages.push(format!("填标题/正文失败: {error}")),
         }
     }
 
     flow.wait_publish_ready(&mut page).await?;
-    messages.push(flow.click_publish(&mut page).await?);
+    messages.push(flow.click_publish(&mut page, content).await?);
 
     Ok(messages.join("；"))
 }

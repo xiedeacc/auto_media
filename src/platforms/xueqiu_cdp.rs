@@ -85,14 +85,18 @@ impl CdpFlow for XueqiuCdp {
         Ok(format!("已提交 {} 张图片到上传控件", images.len()))
     }
 
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String> {
-        let text = join_text(title, body);
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
+        let text = join_text(content.title, content.body);
         page.evaluate(&fill_editable_script(STATUS_FIELD_SELECTORS, &text))
             .await?;
         Ok("雪球动态正文已填充".to_string())
     }
 
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        _content: PublishContent<'_>,
+    ) -> Result<String> {
         for label in ["发布", "发表"] {
             if page.click_eval(&label_center_script(label)).await? {
                 page.drain_dialog_events().await?;

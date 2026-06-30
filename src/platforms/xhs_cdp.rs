@@ -74,8 +74,10 @@ impl CdpFlow for XhsCdp {
         Ok(format!("已提交 {} 张图片到上传控件", images.len()))
     }
 
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String> {
-        let result = page.evaluate(&fill_script(title, body)).await?;
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
+        let result = page
+            .evaluate(&fill_script(content.title, content.body))
+            .await?;
         Ok(result
             .pointer("/result/value/message")
             .and_then(Value::as_str)
@@ -99,7 +101,11 @@ impl CdpFlow for XhsCdp {
         anyhow::bail!("小红书发布按钮未就绪")
     }
 
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        _content: PublishContent<'_>,
+    ) -> Result<String> {
         for label in ["发布", "确认发布", "立即发布"] {
             let result = page.evaluate(&publish_script(label)).await?;
             if result

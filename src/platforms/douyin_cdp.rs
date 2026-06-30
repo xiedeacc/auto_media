@@ -62,8 +62,10 @@ impl CdpFlow for DouyinCdp {
         Ok(format!("已提交 {} 张图片到上传控件", images.len()))
     }
 
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String> {
-        let result = page.evaluate(&fill_script(title, body)).await?;
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
+        let result = page
+            .evaluate(&fill_script(content.title, content.body))
+            .await?;
         Ok(result
             .pointer("/result/value/message")
             .and_then(Value::as_str)
@@ -71,7 +73,11 @@ impl CdpFlow for DouyinCdp {
             .to_string())
     }
 
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        _content: PublishContent<'_>,
+    ) -> Result<String> {
         for label in ["发布", "发布作品", "立即发布"] {
             if page.click_eval(&label_center_script(label)).await? {
                 page.drain_dialog_events().await?;

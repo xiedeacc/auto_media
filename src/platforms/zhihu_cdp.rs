@@ -8,8 +8,12 @@ use crate::browser::cdp::{CdpBrowser, CdpPage, DEFAULT_FILE_INPUT_SELECTORS};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+
+/// Zhihu articles accept only a handful of topics; cap how many we try to set.
+const MAX_TOPICS: usize = 5;
 
 pub struct ZhihuCdp {
     browser: CdpBrowser,
@@ -28,23 +32,102 @@ impl ZhihuCdp {
         }
     }
 
-    async fn click_publish_inner(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish_inner(&self, page: &mut CdpPage, topics: &[String]) -> Result<String> {
+        // The editor's bottom 发布 opens the 发布设置 panel (it does NOT post).
         if !page.click_eval(MAIN_PUBLISH_SCRIPT).await? {
             anyhow::bail!("没有找到知乎发布按钮");
         }
         page.drain_dialog_events().await?;
-        sleep(Duration::from_millis(300)).await;
+        let _ = page
+            .wait_for_truthy(PANEL_READY_SCRIPT, "知乎发布设置面板未出现")
+            .await;
+        sleep(Duration::from_millis(600)).await;
 
+        let added = self.add_topics(page, topics).await;
+
+        // The panel's 发布/确认发布 actually posts.
         for _ in 0..20 {
             if page.click_eval(CONFIRM_PUBLISH_SCRIPT).await? {
                 page.drain_dialog_events().await?;
                 sleep(Duration::from_secs(2)).await;
-                return Ok("已自动点击知乎发布确认按钮".to_string());
+                return Ok(format!("已设置 {added} 个话题并点击知乎发布确认按钮"));
             }
             sleep(Duration::from_millis(250)).await;
         }
-        Ok("已自动点击知乎底部发布按钮，未发现二次确认弹窗".to_string())
+        Ok(format!(
+            "已设置 {added} 个话题并点击底部发布，未发现二次确认弹窗"
+        ))
     }
+
+    /// Add each tag as a real Zhihu topic via the 发布设置 panel: open the topic
+    /// search, type the keyword, and click the exact-match suggestion. Resolved
+    /// keyword→topic titles are cached so repeats select the same topic.
+    async fn add_topics(&self, page: &mut CdpPage, keywords: &[String]) -> usize {
+        if keywords.is_empty() {
+            return 0;
+        }
+        let mut cache = self.load_topic_cache();
+        let mut added = 0usize;
+        for keyword in keywords.iter().filter(|k| !k.is_empty()).take(MAX_TOPICS) {
+            let want = cache.get(keyword).cloned().unwrap_or_else(|| keyword.clone());
+            if eval_bool(page, ADD_TOPIC_BUTTON_SCRIPT).await != Some(true) {
+                continue;
+            }
+            sleep(Duration::from_millis(700)).await;
+            if eval_bool(page, &set_search_script(keyword)).await != Some(true) {
+                continue;
+            }
+            sleep(Duration::from_millis(1600)).await;
+            match eval_string(page, &pick_topic_script(&want)).await {
+                Some(title) if !title.is_empty() => {
+                    added += 1;
+                    cache.insert(keyword.clone(), title);
+                }
+                _ => {
+                    let _ = page.evaluate(CLEAR_SEARCH_SCRIPT).await;
+                }
+            }
+            sleep(Duration::from_millis(600)).await;
+        }
+        self.save_topic_cache(&cache);
+        added
+    }
+
+    fn topic_cache_path(&self) -> PathBuf {
+        self.profile_dir.join("topic_cache.json")
+    }
+
+    fn load_topic_cache(&self) -> HashMap<String, String> {
+        std::fs::read_to_string(self.topic_cache_path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_topic_cache(&self, cache: &HashMap<String, String>) {
+        if let Ok(text) = serde_json::to_string_pretty(cache) {
+            let _ = std::fs::write(self.topic_cache_path(), text);
+        }
+    }
+}
+
+/// Evaluate a script and read its boolean `/result/value`.
+async fn eval_bool(page: &mut CdpPage, script: &str) -> Option<bool> {
+    page.evaluate(script)
+        .await
+        .ok()?
+        .pointer("/result/value")
+        .and_then(Value::as_bool)
+}
+
+/// Evaluate a script and read its string `/result/value`.
+async fn eval_string(page: &mut CdpPage, script: &str) -> Option<String> {
+    page.evaluate(script)
+        .await
+        .ok()?
+        .pointer("/result/value")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
 }
 
 #[async_trait]
@@ -80,8 +163,10 @@ impl CdpFlow for ZhihuCdp {
         Ok(format!("已提交 {} 张图片到上传控件", images.len()))
     }
 
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String> {
-        let result = page.evaluate(&fill_script(title, body)).await?;
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
+        // Tags become real topics in the publish panel, so keep them out of the body.
+        let body = content.body_without_tags();
+        let result = page.evaluate(&fill_script(content.title, &body)).await?;
         Ok(result
             .pointer("/result/value/message")
             .and_then(Value::as_str)
@@ -89,9 +174,15 @@ impl CdpFlow for ZhihuCdp {
             .to_string())
     }
 
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        content: PublishContent<'_>,
+    ) -> Result<String> {
         page.set_accept_beforeunload(true);
-        let result = self.click_publish_inner(page).await;
+        let result = self
+            .click_publish_inner(page, &content.topic_keywords())
+            .await;
         page.set_accept_beforeunload(false);
         result
     }
@@ -103,6 +194,79 @@ const READY_SCRIPT: &str = r#"
   document.querySelector('.public-DraftEditor-content[contenteditable=true]')
 ))()
 "#;
+
+const PANEL_READY_SCRIPT: &str = r#"
+(() => Boolean([...document.querySelectorAll('button,[role=button]')].some(e => (e.innerText || '').trim() === '添加话题')))()
+"#;
+
+/// Click the (smallest visible) "添加话题" button to reveal the topic search box.
+const ADD_TOPIC_BUTTON_SCRIPT: &str = r#"
+(() => {
+  const vis=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';};
+  const btns=[...document.querySelectorAll('button,[role=button]')].filter(vis)
+    .filter(e=>(e.innerText||'').trim()==='添加话题')
+    .sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;});
+  if(!btns[0]) return false;
+  btns[0].scrollIntoView({block:'center'});
+  btns[0].click();
+  return true;
+})()
+"#;
+
+/// Clear the topic search field (after a no-match keyword) for the next attempt.
+const CLEAR_SEARCH_SCRIPT: &str = r#"
+(() => {
+  const el=[...document.querySelectorAll('input')].find(e=>e.getAttribute('placeholder')==='搜索话题...');
+  if(!el) return false;
+  const p=Object.getPrototypeOf(el);
+  Object.getOwnPropertyDescriptor(p,'value').set.call(el,'');
+  el.dispatchEvent(new InputEvent('input',{bubbles:true}));
+  return true;
+})()
+"#;
+
+/// Set the topic search field to `keyword` and fire the input event so Zhihu
+/// fetches matching topic suggestions.
+fn set_search_script(keyword: &str) -> String {
+    let kw = serde_json::to_string(keyword).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(() => {{
+  const kw={kw};
+  const el=[...document.querySelectorAll('input')].find(e=>e.getAttribute('placeholder')==='搜索话题...');
+  if(!el) return false;
+  el.focus();
+  const p=Object.getPrototypeOf(el);
+  Object.getOwnPropertyDescriptor(p,'value').set.call(el,kw);
+  el.dispatchEvent(new InputEvent('input',{{bubbles:true,inputType:'insertText',data:kw}}));
+  el.dispatchEvent(new KeyboardEvent('keyup',{{bubbles:true}}));
+  return true;
+}})()
+"#
+    )
+}
+
+/// Click the suggestion button whose text exactly equals `want` (a real topic);
+/// returns the chosen title, or null if there's no exact match (avoids garbage
+/// topics). Suggestions render as `<button>`s inside a `.Popover-content` popup.
+fn pick_topic_script(want: &str) -> String {
+    let want = serde_json::to_string(want).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(() => {{
+  const want={want};
+  const vis=(el)=>{{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';}};
+  const pops=[...document.querySelectorAll('.Popover-content')].filter(vis);
+  const btns=pops.flatMap(p=>[...p.querySelectorAll('button')]).filter(vis);
+  const exact=btns.find(b=>(b.innerText||'').trim()===want);
+  if(!exact) return null;
+  const chosen=(exact.innerText||'').trim();
+  exact.click();
+  return chosen;
+}})()
+"#
+    )
+}
 
 const MAIN_PUBLISH_SCRIPT: &str = r#"
 (() => {

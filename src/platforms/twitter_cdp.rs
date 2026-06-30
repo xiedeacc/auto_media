@@ -70,8 +70,10 @@ impl CdpFlow for TwitterCdp {
         Ok(format!("已提交 {} 张图片到上传控件", images.len()))
     }
 
-    async fn fill_text(&self, page: &mut CdpPage, title: &str, body: &str) -> Result<String> {
-        let text = [title.trim(), body.trim()]
+    async fn fill_text(&self, page: &mut CdpPage, content: PublishContent<'_>) -> Result<String> {
+        // Tweets have no topic control — keep hashtags inline (content.body already
+        // carries the trailing "#tag" line).
+        let text = [content.title.trim(), content.body.trim()]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -89,7 +91,11 @@ impl CdpFlow for TwitterCdp {
         Ok(())
     }
 
-    async fn click_publish(&self, page: &mut CdpPage) -> Result<String> {
+    async fn click_publish(
+        &self,
+        page: &mut CdpPage,
+        _content: PublishContent<'_>,
+    ) -> Result<String> {
         // Ctrl+Enter is X's native send shortcut and the most reliable trigger:
         // focus the composer, fire it, and verify the composer cleared (= posted).
         page.evaluate(FOCUS_COMPOSER_SCRIPT).await?;
